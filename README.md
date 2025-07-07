@@ -1,220 +1,304 @@
-# Jarvis AI Assistant
+# J.A.R.V.I.S. AI Assistant
 
-A learning project for building a full-stack AI assistant with local AI capabilities. This is an educational implementation designed to be extended and built upon.
+A personal AI assistant inspired by Tony Stark's JARVIS, featuring local AI processing, multi-platform support, and hardware acceleration for NPU/GPU devices.
 
 ## Overview
 
-Jarvis is a web-based AI assistant that combines a FastAPI backend with a React frontend and local AI processing through Ollama. The project demonstrates modern web development practices while providing a foundation for AI integration experiments.
+JARVIS (Just A Rather Very Intelligent System) is a full-stack AI assistant that combines a FastAPI backend with a React frontend and local AI processing through Ollama. Built with a focus on performance, portability, and personality, it provides a witty, capable AI assistant that runs entirely on your local machine.
+
+## Key Features
+
+- 🤖 **Local AI Processing**: Runs entirely on your machine using Ollama - no cloud dependencies
+- 🚀 **Hardware Acceleration**: Automatic NPU/GPU detection and optimization (NVIDIA, AMD, Intel, Qualcomm)
+- 💬 **Personality System**: Configurable AI personality inspired by MCU's JARVIS
+- ⚡ **Cross-Platform**: Optimized for both x64 (Intel/AMD) and ARM64 (Snapdragon X)
+- 🔄 **Fallback Mode**: Continues working even when AI services are unavailable
+- 📊 **Performance Benchmarking**: Built-in benchmarking to measure AI response times
+- 🎨 **Modern UI**: React-based chat interface with real-time updates
 
 ## Architecture
 
-- **Backend**: FastAPI with Python, providing REST API endpoints
-- **Frontend**: React application with TypeScript for the chat interface  
-- **AI Engine**: Ollama for local AI model execution
-- **Database**: File-based configuration (expandable to databases)
-
-## Features
-
-- Real-time chat interface with AI responses
-- Configurable AI personality through JSON configuration
-- Fallback mode when AI services are unavailable
-- RESTful API with automatic documentation
-- Local AI processing (no external API dependencies)
-- Cross-platform compatibility
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  React Frontend │────▶│ FastAPI Backend │────▶│   Ollama AI     │
+│   (Port 3000)   │◀────│   (Port 8000)   │◀────│  (Port 11434)   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │ Personality JSON │
+                    └─────────────────┘
+```
 
 ## Prerequisites
 
-- Node.js (v16 or higher)
-- Python 3.11 or higher
-- Git
-- Ollama (for AI functionality)
+### Required Software
+- **Windows 11** (x64 or ARM64)
+- **PowerShell 7+** 
+- **Python 3.8+** (3.11 recommended)
+- **Node.js 16+**
+- **Git**
 
-## Quick Start
+### Hardware Support
+- **NPU**: Qualcomm Hexagon (Snapdragon X), Intel AI Boost (Core Ultra)
+- **GPU**: NVIDIA (CUDA), AMD, Intel Arc, Qualcomm Adreno
+- **CPU**: Falls back to CPU if no acceleration available
 
-### Automated Setup
+## Installation
 
-Run the setup scripts in order:
+### Automated Setup (Recommended)
+
+Clone the repository and run the setup scripts in order:
 
 ```powershell
-.\01-Prerequisites.ps1
-.\02-SimpleFastApiBackend.ps1 -All
-.\03-OllamaIntegration.ps1 -All
-.\04-OllamaSetupAndTesting.ps1 -All
-.\05-ReactFrontend.ps1 -All
+# Clone the repository
+git clone https://github.com/yourusername/jarvis.git
+cd jarvis
+
+# Run setup scripts in sequence
+.\01-Prerequisites.ps1        # Install system dependencies
+.\02-FastApiBackend.ps1 -All  # Setup backend
+.\03-AIIntegration.ps1 -All   # Integrate AI services
+.\04a-OllamaSetup.ps1         # Install Ollama and models
+.\04c-OllamaTuning.ps1        # Optimize for your hardware
+.\05-ReactFrontend.ps1 -All   # Setup frontend
 ```
 
-### Manual Setup
+### Hardware-Specific Optimization
 
-1. Install backend dependencies:
+The system automatically detects and optimizes for your hardware:
+
 ```powershell
-cd backend
-pip install -r requirements.txt
-```
+# Run hardware detection and optimization
+.\04c-OllamaTuning.ps1
 
-2. Install frontend dependencies:
-```powershell
-cd frontend
-npm install
-```
+# For NVIDIA GPUs - installs CUDA if needed
+.\04c-OllamaTuning.ps1 -Install
 
-3. Install and setup Ollama:
-```powershell
-# Install Ollama (see ollama.com for instructions)
-ollama serve
-ollama pull llama3.1:8b
-```
-
-### Running the Application
-
-#### Option 1: Control Center (Recommended)
-```powershell
-.\run_jarvis.ps1
-```
-Select option 2 to start all services in separate windows.
-
-#### Option 2: Manual Startup
-Start backend:
-```powershell
-.\run_backend.ps1
-```
-
-Start frontend (in new terminal):
-```powershell
-.\run_frontend.ps1
+# Benchmark your system
+.\04c-OllamaTuning.ps1 -Benchmark
 ```
 
 ## Usage
 
-1. Start the application using one of the methods above
-2. Open your browser to http://localhost:3000
-3. Begin chatting with the AI assistant
-4. The AI will respond using the configured personality
+### Starting JARVIS
+
+Option 1: Use individual run scripts
+```powershell
+# Terminal 1 - Start backend
+.\run_backend.ps1
+
+# Terminal 2 - Start frontend
+.\run_frontend.ps1
+```
+
+Option 2: Quick commands after setup
+```powershell
+# Quick backend test
+.\run_backend.ps1 -QuickTest
+
+# Check system health
+.\run_backend.ps1 -Health
+```
+
+### Accessing JARVIS
+
+1. Open your browser to http://localhost:3000
+2. JARVIS will greet you with personality
+3. Start chatting - responses are powered by local AI
+
+### API Documentation
+
+- **Interactive API Docs**: http://localhost:8000/docs
+- **API Health Check**: http://localhost:8000/api/health
 
 ## Configuration
 
-### Personality Configuration
+### Personality Customization
 
-Edit `jarvis_personality.json` to customize the AI's behavior:
+Edit `jarvis_personality.json` to customize JARVIS's behavior:
 
 ```json
 {
-  "identity": {
-    "name": "Jarvis",
-    "display_name": "J.A.R.V.I.S."
-  },
   "personality": {
-    "base_personality": "You are Jarvis, an AI assistant...",
-    "tone": "professional yet friendly"
+    "base_personality": "You are Jarvis, inspired by Tony Stark's AI...",
+    "tone": "witty, professional, with dry humor",
+    "formality": "address user as 'sir' with British politeness"
   }
 }
 ```
 
-Restart the backend after making changes.
+Changes take effect after restarting the backend.
 
-### Environment Variables
+### Environment Configuration
 
-Backend configuration in `.env`:
-- `API_HOST`: Backend host (default: 0.0.0.0)
-- `API_PORT`: Backend port (default: 8000)
-- `OLLAMA_URL`: Ollama service URL (default: http://localhost:11434)
+The `.env` file controls system settings:
+```env
+OLLAMA_MODEL=phi3:mini        # AI model to use
+API_HOST=0.0.0.0             # Backend host
+API_PORT=8000                # Backend port
+OLLAMA_URL=http://localhost:11434
+```
 
-## API Endpoints
+### Supported AI Models
 
-### Core Endpoints
-- `GET /` - Service information
-- `GET /api/health` - Health check with system status
-- `POST /api/chat` - Send message to AI assistant
-- `GET /api/status` - Detailed service status
+Recommended models by hardware:
+- **NPU/Mobile**: `phi3:mini`, `gemma2:2b`, `llama3.2:3b`
+- **GPU (4-8GB)**: `phi3:mini`, `llama3.1:8b`, `mistral:7b`
+- **GPU (8GB+)**: `llama3.1:8b`, `codellama:13b`, `mixtral:8x7b`
 
-### AI-Specific Endpoints  
-- `GET /api/ai/status` - AI service status and available models
-- `GET /api/ai/test` - Test AI connectivity
+## Performance Benchmarks
+
+Example benchmarks from real hardware:
+
+| Hardware | Model | Avg Response | Tokens/sec | Category |
+|----------|-------|--------------|------------|----------|
+| GTX 1650 SUPER | phi3:mini | 4.9s | 15-29 | Acceptable |
+| Snapdragon X NPU | phi3:mini | 4.5s | 27-28 | Acceptable |
+| RTX 4090 | llama3.1:8b | 0.8s | 60-80 | Excellent |
+
+Run your own benchmark:
+```powershell
+.\04c-OllamaTuning.ps1 -Benchmark
+```
 
 ## Project Structure
 
 ```
 jarvis/
-├── jarvis_personality.json    # AI personality configuration
+├── 00-CommonUtils.ps1         # Shared utilities
+├── 01-Prerequisites.ps1       # System dependency installer
+├── 02-FastApiBackend.ps1      # Backend setup
+├── 03-AIIntegration.ps1       # AI service integration
+├── 04a-OllamaSetup.ps1        # Ollama installation
+├── 04b-OllamaDiag.ps1         # Hardware diagnostics
+├── 04c-OllamaTuning.ps1       # Performance optimization
+├── 05-ReactFrontend.ps1       # Frontend setup
+├── jarvis_personality.json    # AI personality config
+├── .env                       # Environment variables
 ├── backend/                   # FastAPI backend
 │   ├── api/                  
-│   │   └── main.py           # Main application
+│   │   └── main.py           # Main API application
 │   ├── services/
-│   │   └── ai_service.py     # AI integration service
-│   ├── tests/                # Backend tests
+│   │   └── ai_service.py     # Ollama integration
 │   └── requirements.txt      # Python dependencies
 ├── frontend/                 # React frontend
 │   ├── src/
 │   │   ├── components/       # React components
-│   │   ├── services/         # API services
+│   │   ├── services/         # API integration
 │   │   └── hooks/           # Custom React hooks
 │   └── package.json         # Node dependencies
-├── run_backend.ps1          # Backend startup script
-├── run_frontend.ps1         # Frontend startup script
-└── run_jarvis.ps1          # Application control center
+├── logs/                    # Application logs
+├── run_backend.ps1          # Backend launcher
+└── run_frontend.ps1         # Frontend launcher
 ```
-
-## Learning Objectives
-
-This project demonstrates:
-
-- Full-stack web application development
-- REST API design and implementation
-- React application development with TypeScript
-- AI integration and fallback handling
-- Configuration management
-- Testing strategies for AI applications
-- Local AI deployment and management
-
-## Extending the Project
-
-### Potential Enhancements
-
-- Voice recognition and text-to-speech
-- Multi-user support with authentication
-- Database integration for conversation history
-- Plugin system for extended functionality
-- Mobile application development
-- Cloud deployment and scaling
-- Advanced AI model fine-tuning
-
-### Development Guidelines
-
-- Follow existing code structure and naming conventions
-- Add tests for new functionality
-- Update documentation for new features
-- Consider backwards compatibility when making changes
-- Use the personality configuration system for AI behavior changes
 
 ## Troubleshooting
 
 ### Common Issues
 
-**AI responses not working**: Ensure Ollama is running and a model is installed
-**Frontend cannot connect**: Verify backend is running on port 8000
-**Import errors**: Check that you're running commands from the correct directory
-**Port conflicts**: Ensure ports 3000 and 8000 are available
+**"Ollama service not running"**
+```powershell
+# Start Ollama manually
+ollama serve
 
-### Getting Help
+# Or restart with optimization script
+.\04c-OllamaTuning.ps1
+```
 
-- Check the application logs in the terminal windows
-- Visit http://localhost:8000/docs for API documentation
-- Test individual components using the provided scripts
-- Review the personality configuration for AI behavior issues
+**"Backend not responding"**
+```powershell
+# Check if backend is running
+.\run_backend.ps1 -Health
 
-## Contributing
+# Check Python packages
+py -m pip list | Select-String "fastapi|uvicorn|ollama"
+```
 
-This is a learning project. Feel free to:
+**"NPU/GPU not detected"**
+```powershell
+# Run hardware diagnostics
+.\04b-OllamaDiag.ps1
 
-- Fork and experiment with different features
-- Try different AI models and configurations
-- Implement additional frontend components
-- Explore different deployment strategies
-- Share improvements and lessons learned
+# Force hardware redetection
+.\04c-OllamaTuning.ps1 -Detect -Configure
+```
+
+**"Slow AI responses"**
+```powershell
+# Try a smaller model
+ollama pull gemma2:2b
+
+# Update .env file
+# OLLAMA_MODEL=gemma2:2b
+
+# Restart backend
+```
+
+### Checking Logs
+
+All operations are logged with timestamps:
+```powershell
+# View latest logs
+Get-ChildItem logs/*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 5
+
+# View specific operation logs
+Get-Content logs/*backend*.txt -Tail 50
+Get-Content logs/*benchmark*.json
+```
+
+## Development
+
+### Extending JARVIS
+
+Future enhancements to explore:
+- 🎤 Voice input/output (speech_recognition, pyttsx3)
+- 🔍 Web search integration (Google/Bing APIs)
+- 📊 Data visualization capabilities
+- 🔌 Plugin system for custom commands
+- 📱 Mobile app development
+- ☁️ Cloud deployment options
+
+### Contributing Guidelines
+
+1. Follow the existing PowerShell patterns in scripts
+2. Use the Write-Log function for all output
+3. Test on both x64 and ARM64 if possible
+4. Update personality config for behavior changes
+5. Add benchmarks for performance changes
+
+## System Requirements
+
+### Minimum Requirements
+- Windows 11 (version 22H2 or later)
+- 8GB RAM
+- 20GB free disk space
+- Internet for initial setup
+
+### Recommended Specifications
+- 16GB+ RAM
+- NPU or dedicated GPU
+- SSD storage
+- Persistent internet for model updates
+
+## Security Considerations
+
+- All AI processing is local - no data leaves your machine
+- API runs on localhost only by default
+- No authentication implemented (add for production use)
+- Personality configuration can access local system
 
 ## License
 
-This project is for educational purposes. Use and modify as needed for learning and development.
+This project is provided as-is for educational and personal use. Feel free to modify and extend as needed.
 
 ## Acknowledgments
 
-Built as a learning exercise for exploring modern web development and AI integration technologies.
+- Inspired by JARVIS from the Marvel Cinematic Universe
+- Built with Ollama for local AI processing
+- FastAPI and React for modern web architecture
+- Community contributions and feedback
+
+---
+
+*"Sometimes you gotta run before you can walk." - Tony Stark*

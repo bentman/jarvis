@@ -1,5 +1,14 @@
-# Python/FastAPI gitignore for Jarvis Backend
+# JARVIS AI Assistant - Complete Project .gitignore
 
+# ===== PROJECT SPECIFIC EXCLUSIONS =====
+# PowerShell run scripts
+run_*.ps1
+
+# Backend and Frontend directories (completely excluded)
+backend/
+frontend/
+
+# ===== PYTHON/FASTAPI BACKEND =====
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -138,21 +147,15 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# ===== IDE/EDITOR FILES =====
 # PyCharm
 .idea/
 
 # VS Code
 .vscode/
 
-# FastAPI specific
-.pytest_cache/
-.coverage
-
-# Database files
-*.db
-*.sqlite
-
-# Log files
+# ===== LOGS AND TEMPORARY FILES =====
+# Log files (but might want to keep logs/ structure for debugging)
 *.log
 logs/
 
@@ -162,16 +165,74 @@ logs/
 temp/
 tmp/
 
-# OS generated files
+# Backup files
+*.backup
+*.bak
+*.orig
+
+# ===== OS GENERATED FILES =====
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
-ehthumbs.db
-Thumbs.db
+.AppleDouble
+.LSOverride
 
-# Backup files
-*.backup
-*.bak
-api/main.py.backup
+# Linux
+*~
+.directory
+.Trash-*
+
+# ===== NODE/REACT FRONTEND (if needed later) =====
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Production
+/build
+
+# Misc
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# ===== DATABASE FILES =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== JARVIS SPECIFIC =====
+# Ollama models (large files)
+models/
+*.gguf
+*.ggml
+
+# Audio files (if implementing voice)
+*.wav
+*.mp3
+*.m4a
+recordings/
+
+# Cache directories
+.cache/
+cache/
+__cache__/
