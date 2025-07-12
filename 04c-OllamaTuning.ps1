@@ -1,36 +1,40 @@
-# 04c-OllamaTuning.ps1 (v4.1) - Hardware Optimization for Ollama (NPU/GPU/CPU)
-# JARVIS AI Assistant - Combines hardware detection, performance tuning, and model optimization
-# Optimized using shared utilities from 00-CommonUtils.ps1
+# 04c-OllamaTuning.ps1 - Ollama Hardware Tuning and Configuration
+# Purpose: Detects, prioritizes, and configures optimal hardware (NPU/GPU/CPU) for Ollama LLM inference.
+# Last edit: 2025-07-11 - Standardized (J.A.R.V.I.S. project); all logic preserved.
 
 param(
-    [switch]$Detect,
-    [switch]$Configure,
     [switch]$Install,
+    [switch]$Configure,
     [switch]$Test,
-    [switch]$OptimizeModels,
-    [switch]$InstallOptimalModels,
-    [switch]$OptimizeExisting,
-    [switch]$Benchmark,
-    [switch]$All
+    [switch]$Run
 )
 
-# Requires PowerShell 7+
-#Requires -Version 7.0
-
 $ErrorActionPreference = "Stop"
-
-# Dot-source shared utilities
 . .\00-CommonUtils.ps1
-
-# Setup logging
+$scriptVersion = "4.2.2"
+$scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$transcriptFile = Join-Path $logsDir "04c-ollama-tuning-transcript-$timestamp.txt"
-$logFile = Join-Path $logsDir "04c-ollama-tuning-log-$timestamp.txt"
+$transcriptFile = Join-Path $logsDir "$scriptPrefix-transcript-$timestamp.txt"
+$logFile = Join-Path $logsDir "$scriptPrefix-log-$timestamp.txt"
 
 New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
 Start-Transcript -Path $transcriptFile
+Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
+
+# Default to full Run if no switch provided
+if (-not ($Install -or $Configure -or $Test -or $Run)) {
+    $Run = $true
+}
+
+$setupResults = @()
+Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
+    Install   = $Install
+    Configure = $Configure
+    Test      = $Test
+    Run       = $Run
+}
 
 # Hardware detection
 function Get-GPUInfo {
@@ -48,16 +52,16 @@ function Get-GPUInfo {
             $procName = $proc.Name
             if ($procName -like "*Snapdragon*" -and $procName -like "*X*") {
                 $npus += [PSCustomObject]@{
-                    Name = "Qualcomm Hexagon NPU ($procName)"
+                    Name          = "Qualcomm Hexagon NPU ($procName)"
                     DriverVersion = "N/A"
-                    PNPDeviceID = "QUALCOMM_NPU"
+                    PNPDeviceID   = "QUALCOMM_NPU"
                 }
             }
             elseif ($procName -like "*Core*Ultra*" -and ($procName -like "*125*" -or $procName -like "*155*" -or $procName -like "*165*")) {
                 $npus += [PSCustomObject]@{
-                    Name = "Intel AI Boost NPU ($procName)"
+                    Name          = "Intel AI Boost NPU ($procName)"
                     DriverVersion = "N/A"
-                    PNPDeviceID = "INTEL_NPU"
+                    PNPDeviceID   = "INTEL_NPU"
                 }
             }
         }
@@ -83,31 +87,31 @@ function Get-GPUInfo {
         $allDevices = @()
         foreach ($npu in $npus) {
             $allDevices += [PSCustomObject]@{
-                Type = "NPU"
-                Name = $npu.Name
+                Type          = "NPU"
+                Name          = $npu.Name
                 DriverVersion = $npu.DriverVersion
-                Priority = 1
+                Priority      = 1
             }
         }
         foreach ($gpu in $gpus) {
             $priority = if ($gpu.Name -match "NVIDIA|AMD") { 2 }
-                       elseif ($gpu.Name -match "Intel|Qualcomm.*Adreno") { 3 }
-                       else { 4 }
+            elseif ($gpu.Name -match "Intel|Qualcomm.*Adreno") { 3 }
+            else { 4 }
             $allDevices += [PSCustomObject]@{
-                Type = "GPU"
-                Name = $gpu.Name
+                Type          = "GPU"
+                Name          = $gpu.Name
                 DriverVersion = $gpu.DriverVersion
-                Priority = $priority
+                Priority      = $priority
             }
         }
 
         if (-not $allDevices) {
             $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
             $allDevices += [PSCustomObject]@{
-                Type = "CPU"
-                Name = $cpu.Name
+                Type          = "CPU"
+                Name          = $cpu.Name
                 DriverVersion = "N/A"
-                Priority = 5
+                Priority      = 5
             }
             Write-Log -Message "No NPU or GPU detected, falling back to CPU" -Level "WARN" -LogFile $LogFile
         }
@@ -119,7 +123,7 @@ function Get-GPUInfo {
             $deviceType = $selectedDevice.Type
             $cudaAvailable = if ($deviceType -eq "GPU" -and $name -match "NVIDIA" -and (Test-Command -Command "nvidia-smi" -LogFile $LogFile)) { "Yes" } else { "No" }
             Write-Log -Message "Selected ${deviceType}: $name (Driver: $driverVersion, CUDA: $cudaAvailable)" -Level "SUCCESS" -LogFile $LogFile
-            return @{Name = $name; DriverVersion = $driverVersion; CudaAvailable = $cudaAvailable; Type = $deviceType}
+            return @{Name = $name; DriverVersion = $driverVersion; CudaAvailable = $cudaAvailable; Type = $deviceType }
         }
         Write-Log -Message "No valid device selected" -Level "ERROR" -LogFile $LogFile
         return $null
@@ -128,7 +132,7 @@ function Get-GPUInfo {
         Write-Log -Message "Device detection failed: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
         $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
         Write-Log -Message "Falling back to CPU: $($cpu.Name)" -Level "WARN" -LogFile $LogFile
-        return @{Name = $cpu.Name; DriverVersion = "N/A"; CudaAvailable = "No"; Type = "CPU"}
+        return @{Name = $cpu.Name; DriverVersion = "N/A"; CudaAvailable = "No"; Type = "CPU" }
     }
 }
 
@@ -141,11 +145,11 @@ function Get-HardwareConfiguration {
     
     Write-Log -Message "Detecting hardware acceleration capabilities..." -Level "INFO" -LogFile $LogFile
     $hardware = @{
-        CPU = @{Name = ""; Cores = 0; Architecture = ""}
-        GPU = @{Available = $false; Type = "None"; Name = ""; VRAM = 0; CUDACapable = $false}
-        NPU = @{Available = $false; Type = "None"; Name = ""; TOPS = 0}
+        CPU           = @{Name = ""; Cores = 0; Architecture = "" }
+        GPU           = @{Available = $false; Type = "None"; Name = ""; VRAM = 0; CUDACapable = $false }
+        NPU           = @{Available = $false; Type = "None"; Name = ""; TOPS = 0 }
         OptimalConfig = "CPU"
-        Platform = ""
+        Platform      = ""
     }
     
     try {
@@ -232,7 +236,7 @@ function Test-CUDAInstallation {
     )
     
     Write-Log -Message "Checking CUDA status..." -Level "INFO" -LogFile $LogFile
-    $cudaStatus = @{Installed = $false; Version = ""; Path = ""}
+    $cudaStatus = @{Installed = $false; Version = ""; Path = "" }
     
     try {
         # First check if nvcc command exists
@@ -283,8 +287,8 @@ function Test-CUDAInstallation {
                 if ($basePath -and (Test-Path $basePath)) {
                     Write-Log -Message "Checking CUDA path: $basePath" -Level "INFO" -LogFile $LogFile
                     $cudaDirs = Get-ChildItem -Path $basePath -Directory -ErrorAction SilentlyContinue | 
-                                Where-Object { $_.Name -match "v\d+\.\d+" } |
-                                Sort-Object Name -Descending
+                    Where-Object { $_.Name -match "v\d+\.\d+" } |
+                    Sort-Object Name -Descending
                     
                     if ($cudaDirs) {
                         $latestCuda = $cudaDirs[0]
@@ -350,31 +354,31 @@ function Set-OllamaConfiguration {
     )
     
     Write-Log -Message "Configuring Ollama for optimal performance..." -Level "INFO" -LogFile $LogFile
-    $config = @{EnvironmentVars = @{}; RestartRequired = $false; Instructions = @()}
+    $config = @{EnvironmentVars = @{}; RestartRequired = $false; Instructions = @() }
     
     switch ($Hardware.OptimalConfig) {
         "Qualcomm_NPU" {
             $config.EnvironmentVars = @{
-                "OLLAMA_NPU" = "1"
-                "OLLAMA_USE_NPU" = "1"
-                "OLLAMA_PREFER_NPU" = "1"
-                "OLLAMA_NUM_PARALLEL" = "2"
+                "OLLAMA_NPU"               = "1"
+                "OLLAMA_USE_NPU"           = "1"
+                "OLLAMA_PREFER_NPU"        = "1"
+                "OLLAMA_NUM_PARALLEL"      = "2"
                 "OLLAMA_MAX_LOADED_MODELS" = "1"
-                "OLLAMA_KEEP_ALIVE" = "2m"
-                "OLLAMA_MAX_VRAM" = "0"
-                "OLLAMA_GPU_LAYERS" = "0"
-                "OLLAMA_FLASH_ATTENTION" = "1"
-                "OLLAMA_F16_KV" = "1"
-                "OLLAMA_CONTEXT_LENGTH" = "2048"
-                "OLLAMA_BATCH_SIZE" = "128"
-                "OLLAMA_N_BATCH" = "128"
-                "OLLAMA_ARM64_NATIVE" = "1"
-                "OLLAMA_LOW_MEM" = "1"
-                "OLLAMA_NPU_ONLY" = "1"
-                "OLLAMA_DISABLE_GPU" = "1"
-                "OLLAMA_CPU_FALLBACK" = "0"
-                "OLLAMA_NUM_THREAD" = "8"
-                "OMP_NUM_THREADS" = "8"
+                "OLLAMA_KEEP_ALIVE"        = "2m"
+                "OLLAMA_MAX_VRAM"          = "0"
+                "OLLAMA_GPU_LAYERS"        = "0"
+                "OLLAMA_FLASH_ATTENTION"   = "1"
+                "OLLAMA_F16_KV"            = "1"
+                "OLLAMA_CONTEXT_LENGTH"    = "2048"
+                "OLLAMA_BATCH_SIZE"        = "128"
+                "OLLAMA_N_BATCH"           = "128"
+                "OLLAMA_ARM64_NATIVE"      = "1"
+                "OLLAMA_LOW_MEM"           = "1"
+                "OLLAMA_NPU_ONLY"          = "1"
+                "OLLAMA_DISABLE_GPU"       = "1"
+                "OLLAMA_CPU_FALLBACK"      = "0"
+                "OLLAMA_NUM_THREAD"        = "8"
+                "OMP_NUM_THREADS"          = "8"
             }
             $config.Instructions += "🚀 Qualcomm NPU optimized"
             $config.RestartRequired = $true
@@ -382,11 +386,11 @@ function Set-OllamaConfiguration {
         "NVIDIA_GPU" {
             if ($CudaStatus.Installed) {
                 $config.EnvironmentVars = @{
-                    "OLLAMA_CUDA" = "1"
-                    "OLLAMA_GPU_LAYERS" = "-1"
-                    "OLLAMA_NUM_PARALLEL" = "4"
+                    "OLLAMA_CUDA"            = "1"
+                    "OLLAMA_GPU_LAYERS"      = "-1"
+                    "OLLAMA_NUM_PARALLEL"    = "4"
                     "OLLAMA_FLASH_ATTENTION" = if ($Hardware.GPU.VRAM -le 8) { "1" } else { "0" }
-                    "OLLAMA_LOW_VRAM" = if ($Hardware.GPU.VRAM -le 4) { "1" } else { "0" }
+                    "OLLAMA_LOW_VRAM"        = if ($Hardware.GPU.VRAM -le 4) { "1" } else { "0" }
                 }
                 $config.Instructions += "✅ NVIDIA GPU acceleration enabled"
                 $config.RestartRequired = $true
@@ -398,9 +402,9 @@ function Set-OllamaConfiguration {
         default {
             $optimalThreads = [Math]::Min($Hardware.CPU.Cores, ($Hardware.Platform -eq "ARM64" ? 8 : 12))
             $config.EnvironmentVars = @{
-                "OLLAMA_NUM_PARALLEL" = $optimalThreads.ToString()
+                "OLLAMA_NUM_PARALLEL"      = $optimalThreads.ToString()
                 "OLLAMA_MAX_LOADED_MODELS" = "1"
-                "OLLAMA_ARM64_OPTIMIZED" = if ($Hardware.Platform -eq "ARM64") { "1" } else { "0" }
+                "OLLAMA_ARM64_OPTIMIZED"   = if ($Hardware.Platform -eq "ARM64") { "1" } else { "0" }
             }
             $config.Instructions += "🔧 CPU optimized with $optimalThreads threads"
             $config.RestartRequired = $true
@@ -516,19 +520,19 @@ function Test-OllamaPerformance {
         
         Write-Log -Message "Benchmarking with $testModel" -Level "INFO" -LogFile $LogFile
         $prompts = @(
-            @{Name = "Arithmetic"; Prompt = "What is 7 + 8?"; Timeout = 45},
-            @{Name = "Reasoning"; Prompt = "List 3 colors quickly."; Timeout = 45},
-            @{Name = "Complex"; Prompt = "Explain AI in 50 words."; Timeout = 90}
+            @{Name = "Arithmetic"; Prompt = "What is 7 + 8?"; Timeout = 45 },
+            @{Name = "Reasoning"; Prompt = "List 3 colors quickly."; Timeout = 45 },
+            @{Name = "Complex"; Prompt = "Explain AI in 50 words."; Timeout = 90 }
         )
         
         $results = @()
         foreach ($p in $prompts) {
-            $body = @{model = $testModel; prompt = $p.Prompt; stream = $false} | ConvertTo-Json
+            $body = @{model = $testModel; prompt = $p.Prompt; stream = $false } | ConvertTo-Json
             $startTime = Get-Date
             $result = Invoke-RestMethod -Uri "http://localhost:11434/api/generate" -Method Post -Body $body -ContentType "application/json" -TimeoutSec $p.Timeout
             $time = [int](($endTime = Get-Date) - $startTime).TotalMilliseconds
             $tokensPerSecond = if ($result.eval_count -and $result.eval_duration) { [math]::Round(($result.eval_count / ($result.eval_duration / 1E9)), 2) } else { "Unknown" }
-            $results += @{Name = $p.Name; Time = $time; TokensPerSecond = $tokensPerSecond}
+            $results += @{Name = $p.Name; Time = $time; TokensPerSecond = $tokensPerSecond }
         }
         
         $avgTime = [int](($results | Measure-Object Time -Average).Average)
@@ -539,12 +543,12 @@ function Test-OllamaPerformance {
         }
         
         $benchmark = @{
-            Model = $testModel
-            Hardware = $Hardware.OptimalConfig
-            Platform = $Hardware.Platform
-            Tests = $results
+            Model       = $testModel
+            Hardware    = $Hardware.OptimalConfig
+            Platform    = $Hardware.Platform
+            Tests       = $results
             AverageTime = $avgTime
-            Category = $category
+            Category    = $category
         }
         
         Write-Log -Message "Benchmark Results: $avgTime ms ($category)" -Level "SUCCESS" -LogFile $LogFile
@@ -643,8 +647,8 @@ function Test-OllamaSetup {
     try {
         $response = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -ErrorAction Stop
         $results += ($response.models.name -contains "phi3:mini") ? 
-            "✅ phi3:mini model available" : 
-            "❌ phi3:mini model not installed"
+        "✅ phi3:mini model available" : 
+        "❌ phi3:mini model not installed"
     }
     catch {
         $results += "❌ Model check failed: $($_.Exception.Message)"
@@ -653,9 +657,11 @@ function Test-OllamaSetup {
     $deviceType = $Hardware.OptimalConfig
     $results += if ($deviceType -eq "Qualcomm_NPU" -or $deviceType -eq "Intel_NPU") { 
         "✅ Optimal hardware (NPU) detected" 
-    } elseif ($deviceType -eq "NVIDIA_GPU") { 
+    }
+    elseif ($deviceType -eq "NVIDIA_GPU") { 
         "✅ Good hardware (GPU) detected" 
-    } else { 
+    }
+    else { 
         "⚠️  Suboptimal hardware (CPU) detected" 
     }
     
@@ -669,107 +675,128 @@ function Test-OllamaSetup {
     return $successCount -eq $results.Count
 }
 
-# Main execution
-Write-Log -Message "JARVIS Ollama Tuning (v4.1) Starting..." -Level "SUCCESS" -LogFile $logFile
-Write-SystemInfo -ScriptName "04c-OllamaTuning.ps1" -Version "4.1" -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
-    Detect = $Detect
-    Configure = $Configure
-    Install = $Install
-    Test = $Test
-    OptimizeModels = $OptimizeModels
-    InstallOptimalModels = $InstallOptimalModels
-    OptimizeExisting = $OptimizeExisting
-    Benchmark = $Benchmark
-    All = $All
-}
-
-if (-not (Test-Command -Command "ollama" -LogFile $logFile)) {
-    Write-Log -Message "Ollama not installed. Run 04a-OllamaSetup.ps1 first." -Level "ERROR" -LogFile $logFile
-    Stop-Transcript
-    exit 1
-}
-
-$results = @()
-$lastHardwareDetection = $null
-$shouldOptimize = $All -or (-not ($Detect -or $Configure -or $Install -or $Test -or $OptimizeModels -or $InstallOptimalModels -or $OptimizeExisting -or $Benchmark))
-
-if ($Detect -or $shouldOptimize) {
-    Write-Log -Message "=== HARDWARE DETECTION ===" -Level "INFO" -LogFile $logFile
-    $hardware = Get-HardwareConfiguration -LogFile $logFile
-    $cudaStatus = if ($hardware.GPU.Type -eq "NVIDIA") { Test-CUDAInstallation -LogFile $logFile } else { @{Installed = $false} }
-    $lastHardwareDetection = @{Hardware = $hardware; CUDA = $cudaStatus}
-    $results += @{Name = "Hardware Detection"; Success = $null -ne $hardware}
-    
-    Write-Log -Message "Platform: $($hardware.Platform)" -Level "SUCCESS" -LogFile $logFile
-    Write-Log -Message "Optimal Config: $($hardware.OptimalConfig)" -Level "SUCCESS" -LogFile $logFile
-    if ($hardware.NPU.Available) { Write-Log -Message "NPU: $($hardware.NPU.Name) ($($hardware.NPU.TOPS) TOPS)" -Level "SUCCESS" -LogFile $logFile }
-    if ($hardware.GPU.Available) { Write-Log -Message "GPU: $($hardware.GPU.Name) ($($hardware.GPU.VRAM)GB)" -Level "SUCCESS" -LogFile $logFile }
-    Write-Log -Message "CPU: $($hardware.CPU.Name)" -Level "INFO" -LogFile $logFile
-}
-
-if ($Install -or $shouldOptimize) {
-    Write-Log -Message "=== ACCELERATION INSTALLATION ===" -Level "INFO" -LogFile $logFile
-    $installSuccess = if ($lastHardwareDetection.Hardware.GPU.Type -eq "NVIDIA" -and -not $lastHardwareDetection.CUDA.Installed) {
-        Install-CUDAToolkit -LogFile $logFile
-    } else {
-        Write-Log -Message "No acceleration installation needed" -Level "INFO" -LogFile $logFile
-        $true
+try {
+    # Main execution
+    Write-Log -Message "JARVIS Ollama Tuning (v4.1) Starting..." -Level "SUCCESS" -LogFile $logFile
+    Write-SystemInfo -ScriptName "04c-OllamaTuning.ps1" -Version "4.1" -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
+        Detect               = $Detect
+        Configure            = $Configure
+        Install              = $Install
+        Test                 = $Test
+        OptimizeModels       = $OptimizeModels
+        InstallOptimalModels = $InstallOptimalModels
+        OptimizeExisting     = $OptimizeExisting
+        Benchmark            = $Benchmark
+        All                  = $All
     }
-    $results += @{Name = "CUDA Installation"; Success = $installSuccess}
-}
 
-if ($Configure -or $shouldOptimize) {
-    Write-Log -Message "=== HARDWARE CONFIGURATION ===" -Level "INFO" -LogFile $logFile
-    $config = Set-OllamaConfiguration -Hardware $lastHardwareDetection.Hardware -CudaStatus $lastHardwareDetection.CUDA -LogFile $logFile
-    foreach ($inst in $config.Instructions) { Write-Log -Message $inst -Level "INFO" -LogFile $logFile }
-    if ($config.RestartRequired) { Write-Log -Message "⚠️ Ollama restart required" -Level "WARN" -LogFile $logFile }
-    $results += @{Name = "Ollama Configuration"; Success = $true}
-}
+    if (-not (Test-Command -Command "ollama" -LogFile $logFile)) {
+        Write-Log -Message "Ollama not installed. Run 04a-OllamaSetup.ps1 first." -Level "ERROR" -LogFile $logFile
+        Stop-Transcript
+        exit 1
+    }
 
-if ($OptimizeModels -or $InstallOptimalModels -or $shouldOptimize) {
-    Write-Log -Message "=== MODEL OPTIMIZATION ===" -Level "INFO" -LogFile $logFile
-    $results += @{Name = "Model Optimization"; Success = (Optimize-OllamaModels -Hardware $lastHardwareDetection.Hardware -LogFile $logFile)}
-}
+    $results = @()
+    $lastHardwareDetection = $null
+    $shouldOptimize = $All -or (-not ($Detect -or $Configure -or $Install -or $Test -or $OptimizeModels -or $InstallOptimalModels -or $OptimizeExisting -or $Benchmark))
 
-if ($OptimizeExisting -or $shouldOptimize) {
-    Write-Log -Message "=== EXISTING MODEL CHECK ===" -Level "INFO" -LogFile $logFile
-    $results += @{Name = "Existing Model Check"; Success = (Optimize-OllamaModels -Hardware $lastHardwareDetection.Hardware -LogFile $logFile)}
-}
+    if ($Detect -or $shouldOptimize) {
+        Write-Log -Message "=== HARDWARE DETECTION ===" -Level "INFO" -LogFile $logFile
+        $hardware = Get-HardwareConfiguration -LogFile $logFile
+        $cudaStatus = if ($hardware.GPU.Type -eq "NVIDIA") { Test-CUDAInstallation -LogFile $logFile } else { @{Installed = $false } }
+        $lastHardwareDetection = @{Hardware = $hardware; CUDA = $cudaStatus }
+        $results += @{Name = "Hardware Detection"; Success = $null -ne $hardware }
+    
+        Write-Log -Message "Platform: $($hardware.Platform)" -Level "SUCCESS" -LogFile $logFile
+        Write-Log -Message "Optimal Config: $($hardware.OptimalConfig)" -Level "SUCCESS" -LogFile $logFile
+        if ($hardware.NPU.Available) { Write-Log -Message "NPU: $($hardware.NPU.Name) ($($hardware.NPU.TOPS) TOPS)" -Level "SUCCESS" -LogFile $logFile }
+        if ($hardware.GPU.Available) { Write-Log -Message "GPU: $($hardware.GPU.Name) ($($hardware.GPU.VRAM)GB)" -Level "SUCCESS" -LogFile $logFile }
+        Write-Log -Message "CPU: $($hardware.CPU.Name)" -Level "INFO" -LogFile $logFile
+    }
 
-if ($Test -or $Benchmark -or $shouldOptimize) {
-    Write-Log -Message "=== PERFORMANCE TESTING ===" -Level "INFO" -LogFile $logFile
-    $restartSuccess = if (Stop-OllamaService -LogFile $logFile) { Start-OllamaService -LogFile $logFile } else { $false }
-    $benchmarkResult = if ($restartSuccess) { Test-OllamaPerformance -Hardware $lastHardwareDetection.Hardware -LogFile $logFile } else { $null }
-    $results += @{Name = "Performance Benchmark"; Success = $null -ne $benchmarkResult}
-}
+    if ($Install -or $shouldOptimize) {
+        Write-Log -Message "=== ACCELERATION INSTALLATION ===" -Level "INFO" -LogFile $logFile
+        $installSuccess = if ($lastHardwareDetection.Hardware.GPU.Type -eq "NVIDIA" -and -not $lastHardwareDetection.CUDA.Installed) {
+            Install-CUDAToolkit -LogFile $logFile
+        }
+        else {
+            Write-Log -Message "No acceleration installation needed" -Level "INFO" -LogFile $logFile
+            $true
+        }
+        $results += @{Name = "CUDA Installation"; Success = $installSuccess }
+    }
 
-if ($shouldOptimize) {
-    Write-Log -Message "=== PERSONALITY IMPORT ===" -Level "INFO" -LogFile $logFile
-    $results += @{Name = "Personality Import"; Success = (Import-PersonalityTraits -LogFile $logFile)}
-}
+    if ($Configure -or $shouldOptimize) {
+        Write-Log -Message "=== HARDWARE CONFIGURATION ===" -Level "INFO" -LogFile $logFile
+        $config = Set-OllamaConfiguration -Hardware $lastHardwareDetection.Hardware -CudaStatus $lastHardwareDetection.CUDA -LogFile $logFile
+        foreach ($inst in $config.Instructions) { Write-Log -Message $inst -Level "INFO" -LogFile $logFile }
+        if ($config.RestartRequired) { Write-Log -Message "⚠️ Ollama restart required" -Level "WARN" -LogFile $logFile }
+        $results += @{Name = "Ollama Configuration"; Success = $true }
+    }
 
-if ($Test -or $shouldOptimize) {
-    Write-Log -Message "=== VALIDATION ===" -Level "INFO" -LogFile $logFile
-    $results += @{Name = "Ollama Setup Validation"; Success = (Test-OllamaSetup -Hardware $lastHardwareDetection.Hardware -LogFile $logFile)}
-}
+    if ($OptimizeModels -or $InstallOptimalModels -or $shouldOptimize) {
+        Write-Log -Message "=== MODEL OPTIMIZATION ===" -Level "INFO" -LogFile $logFile
+        $results += @{Name = "Model Optimization"; Success = (Optimize-OllamaModels -Hardware $lastHardwareDetection.Hardware -LogFile $logFile) }
+    }
 
-Write-Log -Message "=== SUMMARY ===" -Level "INFO" -LogFile $logFile
-$successCount = ($results | Where-Object { $_.Success }).Count
-foreach ($result in $results) {
-    Write-Log -Message "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -Level ($result.Success ? "SUCCESS" : "ERROR") -LogFile $logFile
-}
-Write-Log -Message "Tuning: $successCount/$($results.Count) tasks completed successfully" -Level ($successCount -eq $results.Count ? "SUCCESS" : "ERROR") -LogFile $logFile
+    if ($OptimizeExisting -or $shouldOptimize) {
+        Write-Log -Message "=== EXISTING MODEL CHECK ===" -Level "INFO" -LogFile $logFile
+        $results += @{Name = "Existing Model Check"; Success = (Optimize-OllamaModels -Hardware $lastHardwareDetection.Hardware -LogFile $logFile) }
+    }
 
-if ($successCount -ne $results.Count) {
-    Write-Log -Message "Review logs: $logFile" -Level "INFO" -LogFile $logFile
+    if ($Test -or $Benchmark -or $shouldOptimize) {
+        Write-Log -Message "=== PERFORMANCE TESTING ===" -Level "INFO" -LogFile $logFile
+        $restartSuccess = if (Stop-OllamaService -LogFile $logFile) { Start-OllamaService -LogFile $logFile } else { $false }
+        $benchmarkResult = if ($restartSuccess) { Test-OllamaPerformance -Hardware $lastHardwareDetection.Hardware -LogFile $logFile } else { $null }
+        $results += @{Name = "Performance Benchmark"; Success = $null -ne $benchmarkResult }
+    }
+
+    if ($shouldOptimize) {
+        Write-Log -Message "=== PERSONALITY IMPORT ===" -Level "INFO" -LogFile $logFile
+        $results += @{Name = "Personality Import"; Success = (Import-PersonalityTraits -LogFile $logFile) }
+    }
+
+    if ($Test -or $shouldOptimize) {
+        Write-Log -Message "=== VALIDATION ===" -Level "INFO" -LogFile $logFile
+        $results += @{Name = "Ollama Setup Validation"; Success = (Test-OllamaSetup -Hardware $lastHardwareDetection.Hardware -LogFile $logFile) }
+    }
+
+    Write-Log -Message "=== SUMMARY ===" -Level "INFO" -LogFile $logFile
+    $successCount = ($results | Where-Object { $_.Success }).Count
+    foreach ($result in $results) {
+        Write-Log -Message "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -Level ($result.Success ? "SUCCESS" : "ERROR") -LogFile $logFile
+    }
+    Write-Log -Message "Tuning: $successCount/$($results.Count) tasks completed successfully" -Level ($successCount -eq $results.Count ? "SUCCESS" : "ERROR") -LogFile $logFile
+
+    if ($successCount -ne $results.Count) {
+        Write-Log -Message "Review logs: $logFile" -Level "INFO" -LogFile $logFile
+        Stop-Transcript
+        exit 1
+    }
+
+    Write-Log -Message "Log Files: $transcriptFile, $logFile" -Level "INFO" -LogFile $logFile
+    if ($lastHardwareDetection.Hardware.Platform -eq "ARM64") {
+        Write-Log -Message "ARM64 optimizations active for NPU" -Level "SUCCESS" -LogFile $logFile
+    }
+    Write-Log -Message "JARVIS Ollama Tuning (v4.1) Complete!" -Level "SUCCESS" -LogFile $logFile
+
+
+    # === Colorized summary output ===
+    $successCount = ($setupResults | Where-Object { $_.Success }).Count
+    $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
+    Write-Host "SUCCESS: $successCount" -ForegroundColor Green
+    Write-Host "FAILED: $failCount" -ForegroundColor Red
+    foreach ($result in $setupResults) {
+        $fg = if ($result.Success) { "Green" } else { "Red" }
+        $msg = if ($result.Output -and $result.Output.info) { " ($($result.Output.info))" } else { "" }
+        Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')$msg" -ForegroundColor $fg
+    }
+    Write-Log -Message "Tuning complete." -Level SUCCESS -LogFile $logFile
+}
+catch {
+    Write-Log -Message "Error: $_" -Level ERROR -LogFile $logFile
     Stop-Transcript
     exit 1
 }
-
-Write-Log -Message "Log Files: $transcriptFile, $logFile" -Level "INFO" -LogFile $logFile
-if ($lastHardwareDetection.Hardware.Platform -eq "ARM64") {
-    Write-Log -Message "ARM64 optimizations active for NPU" -Level "SUCCESS" -LogFile $logFile
-}
-Write-Log -Message "JARVIS Ollama Tuning (v4.1) Complete!" -Level "SUCCESS" -LogFile $logFile
-
+Write-Log -Message "$scriptPrefix v$scriptVersion complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript

@@ -1,6 +1,35 @@
 # Common-Utils.ps1 (v2.3) - Shared utilities for JARVIS AI Assistant scripts
 # Contains logging, Python package management, tool checks, and Ollama model detection
 # Optimized for performance, reusability, and cross-platform (x64/ARM64) compatibility
+$scriptVersion = "4.2.2"
+
+# Log system information with modular switches
+function Write-SystemInfo {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptName,
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$LogFile,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Switches
+    )
+    
+    Write-Log -Message "=== SYSTEM INFORMATION ===" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "Script: $ScriptName (v$Version)" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "Timestamp: $(Get-Date)" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "Project Root: $ProjectRoot" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "PowerShell Version: $($PSVersionTable.PSVersion)" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "OS Architecture: $env:PROCESSOR_ARCHITECTURE" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "User: $env:USERNAME" -Level "INFO" -LogFile $LogFile
+    foreach ($switch in $Switches.GetEnumerator()) {
+        Write-Log -Message "$($switch.Key) Mode: $($switch.Value)" -Level "INFO" -LogFile $LogFile
+    }
+    Write-Log -Message "=========================" -Level "INFO" -LogFile $LogFile
+}
 
 # Custom logging function with streamlined color output
 function Write-Log {
@@ -32,32 +61,33 @@ function Write-Log {
     Add-Content -Path $LogFile -Value $logEntry -ErrorAction SilentlyContinue
 }
 
-# Log system information with modular switches
-function Write-SystemInfo {
+function Test-PythonVersion {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$ScriptName,
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
-        [Parameter(Mandatory = $true)]
-        [string]$ProjectRoot,
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile,
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Switches
+        [Parameter(Mandatory = $true)][int]$Major,
+        [Parameter(Mandatory = $true)][int]$Minor,
+        [Parameter(Mandatory = $true)][string]$LogFile
     )
-    
-    Write-Log -Message "=== SYSTEM INFORMATION ===" -Level "INFO" -LogFile $LogFile
-    Write-Log -Message "Script: $ScriptName (v$Version)" -Level "INFO" -LogFile $LogFile
-    Write-Log -Message "Timestamp: $(Get-Date)" -Level "INFO" -LogFile $LogFile
-    Write-Log -Message "Project Root: $ProjectRoot" -Level "INFO" -LogFile $LogFile
-    Write-Log -Message "PowerShell Version: $($PSVersionTable.PSVersion)" -Level "INFO" -LogFile $LogFile
-    Write-Log -Message "OS Architecture: $env:PROCESSOR_ARCHITECTURE" -Level "INFO" -LogFile $LogFile
-    Write-Log -Message "User: $env:USERNAME" -Level "INFO" -LogFile $LogFile
-    foreach ($switch in $Switches.GetEnumerator()) {
-        Write-Log -Message "$($switch.Key) Mode: $($switch.Value)" -Level "INFO" -LogFile $LogFile
+    $pythonCmds = @("python", "python3")
+    foreach ($cmd in $pythonCmds) {
+        try {
+            $verOutput = & $cmd --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and $verOutput -match "Python (\d+)\.(\d+)\.(\d+)") {
+                $foundMajor = [int]$Matches[1]
+                $foundMinor = [int]$Matches[2]
+                $foundPatch = [int]$Matches[3]
+                if ($foundMajor -gt $Major -or ($foundMajor -eq $Major -and $foundMinor -ge $Minor)) {
+                    Write-Log -Message "$cmd version $foundMajor.$foundMinor.$foundPatch meets requirement ($Major.$Minor+)" -Level SUCCESS -LogFile $LogFile
+                    return $true
+                } else {
+                    Write-Log -Message "$cmd version $foundMajor.$foundMinor.$foundPatch found, but does not meet required version ($Major.$Minor+)" -Level WARN -LogFile $LogFile
+                }
+            }
+        } catch {
+            # Ignore missing python command
+        }
     }
-    Write-Log -Message "=========================" -Level "INFO" -LogFile $LogFile
+    Write-Log -Message "Python $Major.$Minor+ not found in PATH." -Level ERROR -LogFile $LogFile
+    return $false
 }
 
 # Resolve Python command with version check

@@ -1,21 +1,38 @@
-# 03-AIIntegration.ps1 (v4.1) - AI Service Setup and Backend Integration
-# JARVIS AI Assistant - Add AI capabilities to existing FastAPI backend
-# Optimized using shared utilities from 00-CommonUtils.ps1
-
+# 03-IntegrateOllama.ps1 - AI integration into FastAPI backend
+# Purpose: Add Ollama-based AIService, personality config, and tests
+# Last edit: 2025-07-11 - Aligned to J.A.R.V.I.S. standards
 param(
     [switch]$Install,
-    [switch]$Test,
     [switch]$Configure,
-    [switch]$All
+    [switch]$Test,
+    [switch]$Run
 )
 
-# Requires PowerShell 7+
-#Requires -Version 7.0
-
 $ErrorActionPreference = "Stop"
-
-# Dot-source shared utilities
 . .\00-CommonUtils.ps1
+$scriptVersion = "4.2.2"
+$scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
+$projectRoot = Get-Location
+$logsDir = Join-Path $projectRoot "logs"
+$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$transcriptFile = Join-Path $logsDir "$scriptPrefix-transcript-$timestamp.txt"
+$logFile = Join-Path $logsDir "$scriptPrefix-log-$timestamp.txt"
+New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
+Start-Transcript -Path $transcriptFile
+Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
+
+# Default to full Run if no switch provided
+if (-not ($Install -or $Configure -or $Test -or $Run)) {
+    $Run = $true
+}
+
+$setupResults = @()
+Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
+    Install   = $Install
+    Configure = $Configure
+    Test      = $Test
+    Run       = $Run
+}
 
 # Setup logging
 $projectRoot = Get-Location
@@ -620,7 +637,7 @@ function Invoke-AIIntegrationTests {
         Write-Log -Message "Executing AI integration tests..." -Level "INFO" -LogFile $LogFile
         & $pythonCmd -m pytest tests/test_ai_integration.py -v
         if ($LASTEXITCODE -eq 0) {
-            Write-Log -Message "All AI integration tests passed" -Level "SUCCESS" -LogFile $LogFile
+            Write-Log -Message "Run AI integration tests passed" -Level "SUCCESS" -LogFile $LogFile
             return $true
         }
         Write-Log -Message "Some AI integration tests failed (exit code: $LASTEXITCODE)" -Level "WARN" -LogFile $LogFile
@@ -711,7 +728,7 @@ Write-SystemInfo -ScriptName "03-AIIntegration.ps1" -Version "4.1" -ProjectRoot 
     Install   = $Install
     Test      = $Test
     Configure = $Configure
-    All       = $All
+    Run       = $Run
 }
 
 if (-not (Test-BackendExists -LogFile $logFile)) {
@@ -728,7 +745,7 @@ $setupResults += @{Name = "AI Service Module"; Success = (New-AIService -LogFile
 $setupResults += @{Name = "FastAPI Enhancement"; Success = (Update-FastAPIApplication -LogFile $logFile) }
 $setupResults += @{Name = "AI Integration Tests"; Success = (New-AIIntegrationTests -LogFile $logFile) }
 
-if ($Install -or $All) {
+if ($Install -or $Run) {
     Write-Log -Message "Installing AI dependencies..." -Level "INFO" -LogFile $logFile
     $setupResults += @{Name = "AI Dependencies"; Success = (Install-AIDependencies -LogFile $logFile) }
 }
@@ -737,12 +754,12 @@ elseif (-not (Test-PythonPackageInstalled -PackageName "ollama" -LogFile $logFil
     $setupResults += @{Name = "Ollama Package (Auto)"; Success = (Install-AIDependencies -LogFile $logFile) }
 }
 
-if ($Configure -or $All) {
+if ($Configure -or $Run) {
     Write-Log -Message "Validating environment configuration..." -Level "INFO" -LogFile $logFile
     $setupResults += @{Name = "Environment Update"; Success = (Test-EnvironmentConfig -LogFile $logFile) }
 }
 
-if ($Test -or $All) {
+if ($Test -or $Run) {
     Write-Log -Message "Running AI integration tests..." -Level "INFO" -LogFile $logFile
     if (Test-PythonPackageInstalled -PackageName "ollama" -LogFile $logFile) {
         $setupResults += @{Name = "AI Tests"; Success = (Invoke-AIIntegrationTests -LogFile $logFile) }
@@ -762,12 +779,12 @@ Write-Log -Message "Setup Results: $successfulSetups successful, $failedSetups f
 
 Test-AIIntegrationSetup -LogFile $logFile | Out-Null
 
-if (-not ($Install -or $Test -or $Configure -or $All)) {
+if (-not ($Install -or $Test -or $Configure -or $Run)) {
     Write-Log -Message "=== NEXT STEPS ===" -Level "INFO" -LogFile $logFile
     Write-Log -Message "1. .\03-AIIntegration.ps1 -Configure   # Validate environment" -Level "INFO" -LogFile $logFile
     Write-Log -Message "2. .\03-AIIntegration.ps1 -Test       # Run AI integration tests" -Level "INFO" -LogFile $logFile
     Write-Log -Message "3. .\04-OllamaSetup.ps1               # Setup Ollama service and models" -Level "INFO" -LogFile $logFile
-    Write-Log -Message "Or run with full setup: .\03-AIIntegration.ps1 -All" -Level "INFO" -LogFile $logFile
+    Write-Log -Message "Or run with full setup: .\03-AIIntegration.ps1 -Run" -Level "INFO" -LogFile $logFile
 }
 
 Write-Log -Message "Backend AI integration ready!" -Level "SUCCESS" -LogFile $logFile
@@ -776,5 +793,16 @@ Write-Log -Message "Log Files Created:" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Full transcript: $transcriptFile" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Structured log: $logFile" -Level "INFO" -LogFile $logFile
 Write-Log -Message "JARVIS AI Integration Setup (v4.1) Complete!" -Level "SUCCESS" -LogFile $logFile
+
+
+# Colorized summary output
+$successCount = ($setupResults | Where-Object { $_.Success }).Count
+$failCount = ($setupResults | Where-Object { -not $_.Success }).Count
+Write-Host "SUCCESS: $successCount" -ForegroundColor Green
+Write-Host "FAILED: $failCount" -ForegroundColor Red
+foreach ($result in $setupResults) {
+    $fg = if ($result.Success) { "Green" } else { "Red" }
+    Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -ForegroundColor $fg
+}
 
 Stop-Transcript

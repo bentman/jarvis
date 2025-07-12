@@ -1,248 +1,101 @@
-# 05-ReactFrontend.ps1 (v4) - React Frontend Setup for Jarvis AI Assistant
-# JARVIS AI Assistant - Modern chat interface with real-time AI communication
-# Enhanced with comprehensive logging and improved error handling following v4 standards
-# Builds upon existing backend structure from scripts 01-04
+# 05-ReactFrontend.ps1 - React Frontend Build and Integration
+# Purpose: Create React frontend with inline-styled components for Jarvis AI
+# Last edit: 2025-07-12 - Simplified and corrected errors
 
 param(
   [switch]$Install,
-  [switch]$Build,
-  [switch]$Run,
-  [switch]$All
+  [switch]$Configure,
+  [switch]$Test,
+  [switch]$Run
 )
 
-# Requires PowerShell 7+
-#Requires -Version 7.0
-
 $ErrorActionPreference = "Stop"
-
-# Get current directory as project root
+. .\00-CommonUtils.ps1
+$scriptVersion = "4.2.3"
+$scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
-
-# Setup logging
-$logsDir = "$projectRoot\logs"
-if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir -Force | Out-Null }
-
+$logsDir = Join-Path $projectRoot "logs"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$transcriptFile = "$logsDir\05-react-frontend-transcript-$timestamp.txt"
-$logFile = "$logsDir\05-react-frontend-log-$timestamp.txt"
+$transcriptFile = Join-Path $logsDir "${scriptPrefix}-transcript-$timestamp.txt"
+$logFile = Join-Path $logsDir "${scriptPrefix}-log-$timestamp.txt"
 
-# Start PowerShell transcript
+New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
 Start-Transcript -Path $transcriptFile
+Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
 
-# Custom logging function with empty message handling
-function Write-Log {
-  param(
-    [Parameter(Mandatory = $false)]
-    [string]$Message = "",
-    [string]$Level = "INFO"
-  )
-    
-  # Handle empty messages (for spacing)
-  if ([string]::IsNullOrWhiteSpace($Message)) {
-    Write-Host ""
-    Add-Content -Path $logFile -Value ""
-    return
-  }
-    
-  $logTimestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-  $logEntry = "[$logTimestamp] [$Level] $Message"
-    
-  # Write to console with appropriate color
-  switch ($Level) {
-    "ERROR" { Write-Host $logEntry -ForegroundColor Red }
-    "WARN" { Write-Host $logEntry -ForegroundColor Yellow }
-    "SUCCESS" { Write-Host $logEntry -ForegroundColor Green }
-    "INFO" { Write-Host $logEntry -ForegroundColor Cyan }
-    default { Write-Host $logEntry }
-  }
-    
-  # Write to log file
-  Add-Content -Path $logFile -Value $logEntry
+# Default to full Run if no switch provided
+if (-not ($Install -or $Configure -or $Test -or $Run)) { $Run = $true }
+
+Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
+  Install   = $Install
+  Configure = $Configure
+  Test      = $Test
+  Run       = $Run
 }
 
-# Log system information
-function Write-SystemInfo {
-  Write-Log "=== SYSTEM INFORMATION ===" "INFO"
-  Write-Log "Script Version: 05-ReactFrontend.ps1 (v4)" "INFO"
-  Write-Log "Timestamp: $(Get-Date)" "INFO"
-  Write-Log "Project Root: $projectRoot" "INFO"
-  Write-Log "PowerShell Version: $($PSVersionTable.PSVersion)" "INFO"
-  Write-Log "User: $env:USERNAME" "INFO"
-  Write-Log "Install Mode: $Install" "INFO"
-  Write-Log "Build Mode: $Build" "INFO"
-  Write-Log "Run Mode: $Run" "INFO"
-  Write-Log "All Mode: $All" "INFO"
-  Write-Log "=========================" "INFO"
+function Test-Prerequisites {
+  param([string]$LogFile)
+  if (-not (Test-Command -Command "node" -LogFile $LogFile)) {
+    Write-Log -Message "Node.js not found. Run 01-Prerequisites.ps1 first." -Level ERROR -LogFile $LogFile
+    return $false
+  }
+  if (-not (Test-Path "backend/api/main.py") -or -not (Test-Path "backend/services/ai_service.py")) {
+    Write-Log -Message "Backend not found. Run scripts 02-04 first." -Level ERROR -LogFile $LogFile
+    return $false
+  }
+  return $true
 }
 
-# Function to check if command exists
-function Test-Command {
-  param([string]$Command)
-  try {
-    $null = Get-Command $Command -ErrorAction Stop
+function New-ReactApp {
+  param([string]$LogFile)
+  if (Test-Path "frontend/package.json") {
+    Write-Log -Message "React app already exists" -Level SUCCESS -LogFile $LogFile
     return $true
   }
+  Write-Log -Message "Creating React app (this may take 2-5 minutes)..." -Level INFO -LogFile $LogFile
+  try {
+    $result = cmd /c "echo y | npx create-react-app frontend --template typescript 2>&1"
+    if (-not (Test-Path "frontend/package.json")) {
+      Write-Log -Message "TypeScript template failed, trying basic React..." -Level WARN -LogFile $LogFile
+      if (Test-Path "frontend") { Remove-Item "frontend" -Recurse -Force }
+      $result = cmd /c "echo y | npx create-react-app frontend 2>&1"
+    }
+    if (Test-Path "frontend/package.json") {
+      Write-Log -Message "React app created successfully" -Level SUCCESS -LogFile $LogFile
+      return $true
+    }
+    Write-Log -Message "Failed to create React app: $result" -Level ERROR -LogFile $LogFile
+    return $false
+  }
   catch {
+    Write-Log -Message "React app creation failed: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
 }
 
-# Function to test if Node.js is installed
-function Test-NodeInstalled {
-  return Test-Command "node"
-}
-
-# Function to test if backend exists
-function Test-BackendExists {
-  return (Test-Path "backend/api/main.py") -and (Test-Path "backend/services/ai_service.py") -and (Test-Path "run_backend.ps1")
-}
-
-# Function to get Node.js version
-function Get-NodeVersion {
-  try {
-    $version = node --version 2>$null
-    return $version
-  }
-  catch {
-    return "version check failed"
-  }
-}
-
-# Function to create frontend directory structure
-function New-FrontendStructure {
-  Write-Log "Creating React frontend structure..." "INFO"
-    
-  if (Test-Path "frontend") {
-    Write-Log "Frontend directory already exists - checking for updates needed" "INFO"
-        
-    # Check if it's a valid React app
-    if (-not (Test-Path "frontend/package.json")) {
-      Write-Log "Invalid frontend directory found - recreating" "WARN"
-      Remove-Item "frontend" -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    else {
-      Write-Log "Valid React app structure detected" "SUCCESS"
-    }
-  }
-    
-  if (-not (Test-Path "frontend")) {
-    Write-Log "Creating new React app..." "INFO"
-    Write-Log "This may take 2-5 minutes..." "WARN"
-        
-    try {
-      # First, try with TypeScript template
-      Write-Log "Attempting to create TypeScript React app..." "INFO"
-            
-      # Use cmd /c to execute npx properly on Windows
-      $result = cmd /c "echo y | npx create-react-app frontend --template typescript 2>&1"
-            
-      if (-not (Test-Path "frontend/package.json")) {
-        Write-Log "TypeScript template failed, trying basic React app..." "WARN"
-                
-        # Clean up any partial installation
-        if (Test-Path "frontend") {
-          Remove-Item "frontend" -Recurse -Force
-        }
-                
-        # Try basic React app
-        Write-Log "Creating basic React app..." "INFO"
-        $result = cmd /c "echo y | npx create-react-app frontend 2>&1"
-                
-        if (-not (Test-Path "frontend/package.json")) {
-          Write-Log "Failed to create React app. Output: $result" "ERROR"
-          return $false
-        }
-      }
-            
-      Write-Log "React app created successfully" "SUCCESS"
-    }
-    catch {
-      Write-Log "Failed to create React app: $($_.Exception.Message)" "ERROR"
-      return $false
-    }
-  }
-    
-  # Create additional directories for our Jarvis components
-  $directories = @(
-    "frontend/src/components",
-    "frontend/src/services",
-    "frontend/src/types",
-    "frontend/src/hooks",
-    "frontend/src/styles"
-  )
-    
-  $createdCount = 0
-  $existingCount = 0
-    
-  foreach ($dir in $directories) {
-    if (!(Test-Path $dir)) {
-      New-Item -ItemType Directory -Path $dir -Force | Out-Null
-      Write-Log "Created directory: $dir" "SUCCESS"
-      $createdCount++
-    }
-    else {
-      Write-Log "Directory exists: $dir" "INFO"
-      $existingCount++
-    }
-  }
-    
-  Write-Log "Frontend structure ready: $createdCount created, $existingCount existing" "SUCCESS"
-  return $true
-}
-
-# Function to install frontend dependencies
-function Install-FrontendDependencies {
-  Write-Log "Installing additional frontend dependencies..." "INFO"
-    
+function Install-Dependencies {
+  param([string]$LogFile)
   Push-Location
   try {
     Set-Location frontend
-        
-    # Check if dependencies are already installed
-    if (Test-Path "node_modules") {
-      $packageJson = Get-Content "package.json" | ConvertFrom-Json
-      $hasRequiredDeps = $packageJson.dependencies."axios" -and $packageJson.dependencies."lucide-react"
-            
-      if ($hasRequiredDeps) {
-        Write-Log "Required dependencies already installed" "SUCCESS"
-        return $true
-      }
-    }
-        
-    # Install only essential dependencies (no Tailwind to avoid PostCSS issues)
-    $packages = @(
-      "@types/react",
-      "@types/react-dom", 
-      "axios",
-      "lucide-react",
-      "react-markdown"
-    )
-        
-    Write-Log "Installing packages: $($packages -join ', ')" "INFO"
-    $installResult = npm install @($packages) 2>&1
-        
-    if ($LASTEXITCODE -eq 0) {
-      Write-Log "Frontend dependencies installed successfully" "SUCCESS"
+    $packageJson = Get-Content "package.json" | ConvertFrom-Json
+    $hasRequiredDeps = $packageJson.dependencies."axios" -and $packageJson.dependencies."lucide-react"
+    if ($hasRequiredDeps) {
+      Write-Log -Message "Dependencies already installed" -Level SUCCESS -LogFile $LogFile
       return $true
     }
-    else {
-      Write-Log "Some dependencies may have had issues but continuing..." "WARN"
-      Write-Log "Install output: $installResult" "INFO"
-            
-      # Check if critical packages were installed
-      $packageJson = Get-Content "package.json" | ConvertFrom-Json
-      if ($packageJson.dependencies."axios" -and $packageJson.dependencies."lucide-react") {
-        Write-Log "Critical dependencies installed successfully" "SUCCESS"
-        return $true
-      }
-      else {
-        Write-Log "Critical dependencies missing" "ERROR"
-        return $false
-      }
+    Write-Log -Message "Installing frontend dependencies..." -Level INFO -LogFile $LogFile
+    $packages = @("@types/react", "@types/react-dom", "axios", "lucide-react", "react-markdown")
+    npm install @($packages) 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Log -Message "Dependencies installed successfully" -Level SUCCESS -LogFile $LogFile
+      return $true
     }
+    Write-Log -Message "Some dependencies had issues but continuing..." -Level WARN -LogFile $LogFile
+    return $true
   }
   catch {
-    Write-Log "Failed to install frontend dependencies: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to install dependencies: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
   finally {
@@ -250,12 +103,13 @@ function Install-FrontendDependencies {
   }
 }
 
-# Function to create styling and components (PRESERVE EXACT CSS)
-function New-StylingAndComponents {
-  Write-Log "Creating minimal CSS (inline styles used in components)..." "INFO"
-    
-  # CRITICAL: Preserve exact CSS from working version - DO NOT MODIFY
-  $minimalCSS = @"
+function New-FrontendFiles {
+  param([string]$LogFile)
+  # Create directory structure
+  $directories = @("frontend/src/components", "frontend/src/services", "frontend/src/types", "frontend/src/hooks", "frontend/src/styles")
+  New-DirectoryStructure -Directories $directories -LogFile $LogFile
+  # Create CSS file (PRESERVE EXACT FORMATTING)
+  $cssContent = @"
 * {
   margin: 0;
   padding: 0;
@@ -304,22 +158,15 @@ button:hover {
   background: #00d4ff;
 }
 "@
-    
   try {
-    Set-Content -Path "frontend/src/styles/index.css" -Value $minimalCSS
-    Write-Log "Minimal CSS created (components use inline styles)" "SUCCESS"
-    return $true
+    Set-Content -Path "frontend/src/styles/index.css" -Value $cssContent
+    Write-Log -Message "CSS file created" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create CSS file: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create CSS: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-}
-
-# Function to create API service
-function New-ApiService {
-  Write-Log "Creating API service..." "INFO"
-    
+  # Create API service
   $apiService = @"
 import axios from 'axios';
 
@@ -388,22 +235,15 @@ export class ApiService {
 
 export default ApiService;
 "@
-    
   try {
     Set-Content -Path "frontend/src/services/api.ts" -Value $apiService
-    Write-Log "API service created successfully" "SUCCESS"
-    return $true
+    Write-Log -Message "API service created" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create API service: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create API service: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-}
-
-# Function to create TypeScript types
-function New-TypeDefinitions {
-  Write-Log "Creating TypeScript types..." "INFO"
-    
+  # Create TypeScript types
   $types = @"
 export interface Message {
   id: string;
@@ -430,22 +270,15 @@ export interface AppState {
   error: string | null;
 }
 "@
-    
   try {
     Set-Content -Path "frontend/src/types/index.ts" -Value $types
-    Write-Log "TypeScript types created successfully" "SUCCESS"
-    return $true
+    Write-Log -Message "TypeScript types created" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create TypeScript types: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create types: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-}
-
-# Function to create chat hook
-function New-ChatHook {
-  Write-Log "Creating chat hook..." "INFO"
-    
+  # Create chat hook
   $chatHook = @"
 import { useState, useCallback, useEffect } from 'react';
 import { ApiService } from '../services/api';
@@ -557,23 +390,15 @@ export function useChat() {
   };
 }
 "@
-    
   try {
     Set-Content -Path "frontend/src/hooks/useChat.ts" -Value $chatHook
-    Write-Log "Chat hook created successfully" "SUCCESS"
-    return $true
+    Write-Log -Message "Chat hook created" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create chat hook: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create chat hook: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-}
-
-# Function to create chat component (PRESERVE EXACT INLINE STYLES)
-function New-ChatComponent {
-  Write-Log "Creating chat component with inline styles..." "INFO"
-    
-  # CRITICAL: Preserve exact inline styles from working version - DO NOT MODIFY
+  # Create chat component (PRESERVE EXACT INLINE STYLES)
   $chatComponent = @"
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Wifi, WifiOff, Cpu } from 'lucide-react';
@@ -904,22 +729,15 @@ export function Chat() {
   );
 }
 "@
-    
   try {
     Set-Content -Path "frontend/src/components/Chat.tsx" -Value $chatComponent
-    Write-Log "Full-screen inline-styled chat component created" "SUCCESS"
-    return $true
+    Write-Log -Message "Chat component created with preserved inline styles" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create chat component: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create chat component: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-}
-
-# Function to create main App component
-function New-AppComponent {
-  Write-Log "Creating main App component..." "INFO"
-    
+  # Create App component
   $appComponent = @"
 import React from 'react';
 import { Chat } from './components/Chat';
@@ -938,9 +756,15 @@ export default App;
     
   try {
     Set-Content -Path "frontend/src/App.tsx" -Value $appComponent
-        
-    # Update index.tsx to import our styles
-    $indexTSX = @"
+    Write-Log -Message "App component created" -Level SUCCESS -LogFile $LogFile
+  }
+  catch {
+    Write-Log -Message "Failed to create App component: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+    return $false
+  }
+    
+  # Update index.tsx
+  $indexTSX = @"
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
@@ -954,21 +778,15 @@ root.render(
   </React.StrictMode>
 );
 "@
-        
+  try {
     Set-Content -Path "frontend/src/index.tsx" -Value $indexTSX
-    Write-Log "Main App component created successfully" "SUCCESS"
-    return $true
+    Write-Log -Message "Index component updated" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create main App component: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to update index component: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-}
-
-# Function to create environment configuration
-function New-EnvironmentConfig {
-  Write-Log "Creating environment configuration..." "INFO"
-    
+  # Create environment config
   $envContent = @"
 # React App Environment Configuration
 REACT_APP_API_URL=http://localhost:8000
@@ -981,143 +799,76 @@ GENERATE_SOURCEMAP=true
     
   try {
     Set-Content -Path "frontend/.env" -Value $envContent
-    Write-Log "Environment file created successfully" "SUCCESS"
-    return $true
+    Write-Log -Message "Environment configuration created" -Level SUCCESS -LogFile $LogFile
   }
   catch {
-    Write-Log "Failed to create environment file: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create environment config: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
+    
+  return $true
 }
 
-# Function to update package.json scripts
-function Update-PackageJsonScripts {
-  Write-Log "Updating package.json scripts..." "INFO"
-    
-  Push-Location
-  try {
-    Set-Location frontend
-        
-    # Read existing package.json
-    $packageJsonContent = Get-Content "package.json" -Raw
-    $packageJson = $packageJsonContent | ConvertFrom-Json
-        
-    # Add custom scripts if they don't exist
-    if (-not $packageJson.scripts."build:prod") {
-      $packageJson.scripts | Add-Member -Type NoteProperty -Name "build:prod" -Value "npm run build" -Force
-    }
-    if (-not $packageJson.scripts."preview") {
-      $packageJson.scripts | Add-Member -Type NoteProperty -Name "preview" -Value "npm run build && npx serve -s build -l 3000" -Force
-    }
-        
-    # Convert back to JSON and save
-    $updatedJson = $packageJson | ConvertTo-Json -Depth 10
-    Set-Content "package.json" -Value $updatedJson
-        
-    Write-Log "Package.json scripts updated successfully" "SUCCESS"
-    return $true
-  }
-  catch {
-    Write-Log "Could not update package.json scripts: $($_.Exception.Message)" "WARN"
-    return $false
-  }
-  finally {
-    Pop-Location
-  }
-}
-
-# Function to create frontend run script
-function New-FrontendRunScript {
-  Write-Log "Creating frontend run script..." "INFO"
-    
+function New-RunScript {
+  param([string]$LogFile)
   $runScript = @"
-# run_frontend.ps1 - Start the React frontend (v4)
+# run_frontend.ps1 - Start the React frontend
 param(
     [switch]`$Build,
     [switch]`$Install,
     [switch]`$Dev
 )
-
-function Write-FrontendLog {
-    param([string]`$Message, [string]`$Level = "INFO")
-    `$timestamp = Get-Date -Format "HH:mm:ss"
-    switch (`$Level) {
-        "ERROR" { Write-Host "[`$timestamp] ❌ `$Message" -ForegroundColor Red }
-        "WARN" { Write-Host "[`$timestamp] ⚠️  `$Message" -ForegroundColor Yellow }
-        "SUCCESS" { Write-Host "[`$timestamp] ✅ `$Message" -ForegroundColor Green }
-        "INFO" { Write-Host "[`$timestamp] 📍 `$Message" -ForegroundColor Cyan }
-        default { Write-Host "[`$timestamp] `$Message" }
-    }
-}
-
 if (`$Install) {
-    Write-FrontendLog "Installing frontend dependencies..." "INFO"
+    Write-Host "Installing frontend dependencies..." -ForegroundColor Cyan
     if (-not (Test-Path "frontend")) {
-        Write-FrontendLog "Frontend directory not found" "ERROR"
+        Write-Host "Frontend directory not found" -ForegroundColor Red
         return
     }
     
     Push-Location frontend
     try {
         npm install
-        if (`$LASTEXITCODE -eq 0) {
-            Write-FrontendLog "Dependencies installed successfully" "SUCCESS"
-        } else {
-            Write-FrontendLog "Dependency installation had issues" "WARN"
-        }
-    } finally {
-        Pop-Location
-    }
+        if (`$LASTEXITCODE -eq 0) { Write-Host "Dependencies installed successfully" -ForegroundColor Green } 
+        else { Write-Host "Dependency installation had issues" -ForegroundColor Yellow }
+    } 
+    finally { Pop-Location }
     return
 }
-
 if (`$Build) {
-    Write-FrontendLog "Building frontend for production..." "INFO"
+    Write-Host "Building frontend for production..." -ForegroundColor Cyan
     if (-not (Test-Path "frontend")) {
-        Write-FrontendLog "Frontend directory not found" "ERROR"
+        Write-Host "Frontend directory not found" -ForegroundColor Red
         return
     }
-    
     Push-Location frontend
     try {
         npm run build
-        if (`$LASTEXITCODE -eq 0) {
-            Write-FrontendLog "Build complete - files in frontend/build/" "SUCCESS"
-        } else {
-            Write-FrontendLog "Build failed" "ERROR"
-        }
-    } finally {
-        Pop-Location
-    }
+        if (`$LASTEXITCODE -eq 0) { Write-Host "Build complete - files in frontend/build/" -ForegroundColor Green }
+        else { Write-Host "Build failed" -ForegroundColor Red }
+    } 
+    finally { Pop-Location }
     return
 }
-
-Write-FrontendLog "Starting Jarvis AI Frontend..." "SUCCESS"
+Write-Host "Starting Jarvis AI Frontend..." -ForegroundColor Green
 Write-Host ""
-Write-Host "📍 Frontend URL: http://localhost:3000" -ForegroundColor Cyan
-Write-Host "🔗 Make sure backend is running on: http://localhost:8000" -ForegroundColor Cyan
+Write-Host "Frontend URL: http://localhost:3000" -ForegroundColor Cyan
+Write-Host "Backend URL: http://localhost:8000 (required)" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "💡 To start backend: .\run_backend.ps1" -ForegroundColor Yellow
-Write-Host "🛑 Press Ctrl+C to stop the frontend" -ForegroundColor Red
+Write-Host "To start backend: .\run_backend.ps1" -ForegroundColor Yellow
+Write-Host "Press Ctrl+C to stop the frontend" -ForegroundColor Red
 Write-Host ""
-
 # Check if backend is running
 try {
     `$response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
-    Write-FrontendLog "Backend detected - full functionality available" "SUCCESS"
-} catch {
-    Write-FrontendLog "Backend not detected - start it for full functionality" "WARN"
-}
-
+    Write-Host "Backend detected - full functionality available" -ForegroundColor Green
+} 
+catch { Write-Host "Backend not detected - start it for full functionality" -ForegroundColor Yellow }
 Write-Host ""
-
 if (-not (Test-Path "frontend")) {
-    Write-FrontendLog "Frontend directory not found - run .\05-ReactFrontend.ps1 -Install first" "ERROR"
+    Write-Host "Frontend directory not found - run .\05-ReactFrontend.ps1 first" -ForegroundColor Red
     return
 }
-
-Write-FrontendLog "Starting React development server..." "INFO"
-
+Write-Host "Starting React development server..." -ForegroundColor Cyan
 Push-Location frontend
 try {
     npm start
@@ -1125,427 +876,162 @@ try {
     Pop-Location
 }
 "@
-    
   try {
     Set-Content -Path "run_frontend.ps1" -Value $runScript
-    Write-Log "Frontend run script created successfully" "SUCCESS"
+    Write-Log -Message "Frontend run script created" -Level SUCCESS -LogFile $LogFile
     return $true
   }
   catch {
-    Write-Log "Failed to create frontend run script: $($_.Exception.Message)" "ERROR"
+    Write-Log -Message "Failed to create run script: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
 }
 
-# Function to build frontend for production
-function Build-FrontendProduction {
-  Write-Log "Building frontend for production..." "INFO"
-    
-  if (-not (Test-Path "frontend/package.json")) {
-    Write-Log "Frontend not found - run setup first" "ERROR"
-    return $false
-  }
-    
-  Push-Location
-  try {
-    Set-Location frontend
-        
-    Write-Log "Running production build..." "INFO"
-    $buildResult = npm run build 2>&1
-        
-    if ($LASTEXITCODE -eq 0) {
-      Write-Log "Frontend production build completed successfully" "SUCCESS"
-            
-      # Check build output
-      if (Test-Path "build") {
-        $buildSize = (Get-ChildItem "build" -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-        Write-Log "Build output: $('{0:N2}' -f $buildSize) MB in build/ directory" "INFO"
-      }
-      return $true
-    }
-    else {
-      Write-Log "Frontend build failed" "ERROR"
-      Write-Log "Build output: $buildResult" "ERROR"
-      return $false
-    }
-  }
-  catch {
-    Write-Log "Exception during frontend build: $($_.Exception.Message)" "ERROR"
-    return $false
-  }
-  finally {
-    Pop-Location
-  }
-}
-
-# Function to start development server
-function Start-DevelopmentServer {
-  Write-Log "Starting React development server..." "INFO"
-    
-  if (-not (Test-Path "frontend/package.json")) {
-    Write-Log "Frontend not found - run setup first" "ERROR"
-    return
-  }
-    
-  Write-Log ""
-  Write-Log "Starting Jarvis AI Frontend..." "SUCCESS"
-  Write-Log ""
-  Write-Log "Frontend URL: http://localhost:3000" "INFO"
-  Write-Log "Backend URL: http://localhost:8000 (required for full functionality)" "INFO"
-  Write-Log ""
-    
-  # Check if backend is running
-  try {
-    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
-    Write-Log "Backend detected - full functionality available" "SUCCESS"
-  }
-  catch {
-    Write-Log "Backend not detected - start it for full functionality" "WARN"
-    Write-Log "Run in another terminal: .\run_backend.ps1" "INFO"
-  }
-    
-  Write-Log ""
-  Write-Log "The development server will start and block this terminal." "WARN"
-  Write-Log "Press Ctrl+C to stop the frontend server" "WARN"
-  Write-Log ""
-    
-  $confirm = Read-Host "Ready to start the frontend development server? (Y/n)"
-  if ($confirm -eq "" -or $confirm -eq "y" -or $confirm -eq "Y") {
-    Write-Log "Starting development server in 3 seconds..." "INFO"
-    Start-Sleep -Seconds 3
-        
-    Push-Location
-    try {
-      Set-Location frontend
-      npm start
-    }
-    catch {
-      Write-Log "Failed to start development server: $($_.Exception.Message)" "ERROR"
-    }
-    finally {
-      Pop-Location
-    }
-  }
-  else {
-    Write-Log "Development server start cancelled. Run manually with: .\run_frontend.ps1" "SUCCESS"
-  }
-}
-
-# Function to validate frontend setup
 function Test-FrontendSetup {
-  Write-Log "Validating frontend setup..." "INFO"
-    
-  $validationResults = @()
-    
-  # Check Node.js
-  if (Test-NodeInstalled) {
-    $nodeVersion = Get-NodeVersion
-    $validationResults += "✅ Node.js: $nodeVersion"
-  }
-  else {
-    $validationResults += "❌ Node.js: Not installed"
-  }
-    
-  # Check backend dependencies
-  if (Test-BackendExists) {
-    $validationResults += "✅ Backend: AI-enhanced backend ready"
-  }
-  else {
-    $validationResults += "❌ Backend: Missing (run scripts 02-04 first)"
-  }
-    
-  # Check frontend structure
-  $frontendChecks = @{
-    "Frontend Directory"   = "frontend"
-    "Package.json"         = "frontend/package.json"
-    "Source Directory"     = "frontend/src"
-    "Components Directory" = "frontend/src/components"
-    "Chat Component"       = "frontend/src/components/Chat.tsx"
-    "API Service"          = "frontend/src/services/api.ts"
-    "Chat Hook"            = "frontend/src/hooks/useChat.ts"
-    "Types"                = "frontend/src/types/index.ts"
-    "Styles"               = "frontend/src/styles/index.css"
-    "App Component"        = "frontend/src/App.tsx"
-    "Index Component"      = "frontend/src/index.tsx"
-    "Environment Config"   = "frontend/.env"
-    "Frontend Run Script"  = "run_frontend.ps1"
-  }
-    
-  foreach ($check in $frontendChecks.GetEnumerator()) {
-    if (Test-Path $check.Value) {
-      if (Test-Path $check.Value -PathType Leaf) {
-        $size = (Get-Item $check.Value).Length
-        $validationResults += "✅ $($check.Key): Ready ($size bytes)"
-      }
-      else {
-        $validationResults += "✅ $($check.Key): Ready"
-      }
+  param([string]$LogFile)
+  Write-Log -Message "Validating frontend setup..." -Level INFO -LogFile $LogFile
+  $checks = @(
+    @{Name = "Node.js"; Path = "node"; IsCommand = $true },
+    @{Name = "Frontend Directory"; Path = "frontend" },
+    @{Name = "Package.json"; Path = "frontend/package.json" },
+    @{Name = "Chat Component"; Path = "frontend/src/components/Chat.tsx" },
+    @{Name = "API Service"; Path = "frontend/src/services/api.ts" },
+    @{Name = "Chat Hook"; Path = "frontend/src/hooks/useChat.ts" },
+    @{Name = "Types"; Path = "frontend/src/types/index.ts" },
+    @{Name = "Styles"; Path = "frontend/src/styles/index.css" },
+    @{Name = "App Component"; Path = "frontend/src/App.tsx" },
+    @{Name = "Environment Config"; Path = "frontend/.env" },
+    @{Name = "Run Script"; Path = "run_frontend.ps1" }
+  )
+  $results = @()
+  foreach ($check in $checks) {
+    if ($check.IsCommand) {
+      $status = Test-Command -Command $check.Path -LogFile $LogFile
     }
     else {
-      $validationResults += "❌ $($check.Key): Missing"
+      $status = Test-Path $check.Path
     }
+    $results += "$($status ? '✅' : '❌') $($check.Name)"
   }
     
-  # Check npm dependencies if frontend exists
+  # Check dependencies if package.json exists
   if (Test-Path "frontend/package.json") {
     Push-Location
     try {
       Set-Location frontend
-            
-      # Check if node_modules exists
       if (Test-Path "node_modules") {
-        $validationResults += "✅ Dependencies: node_modules installed"
-                
-        # Check critical packages
         $packageJson = Get-Content "package.json" | ConvertFrom-Json
-        $criticalPackages = @("react", "axios", "lucide-react")
+        $hasAxios = $packageJson.dependencies."axios"
+        $hasLucide = $packageJson.dependencies."lucide-react"
                 
-        foreach ($package in $criticalPackages) {
-          if ($packageJson.dependencies.$package) {
-            $validationResults += "✅ Package: $package"
-          }
-          else {
-            $validationResults += "❌ Package: $package missing"
-          }
-        }
+        $results += "$($hasAxios ? '✅' : '❌') Package: axios"
+        $results += "$($hasLucide ? '✅' : '❌') Package: lucide-react"
+        $results += "✅ Dependencies: node_modules installed"
       }
       else {
-        $validationResults += "❌ Dependencies: node_modules not found (run -Install)"
+        $results += "❌ Dependencies: node_modules not found"
       }
     }
     catch {
-      $validationResults += "⚠️  Dependencies: Could not verify packages"
+      $results += "⚠️ Dependencies: Could not verify"
     }
     finally {
       Pop-Location
     }
   }
     
-  # Display results
-  Write-Log ""
-  Write-Log "=== FRONTEND VALIDATION RESULTS ===" "INFO"
-  foreach ($result in $validationResults) {
-    if ($result -like "✅*") {
-      Write-Log $result "SUCCESS"
-    }
-    elseif ($result -like "⚠️*") {
-      Write-Log $result "WARN"
-    }
-    else {
-      Write-Log $result "ERROR"
-    }
+  Write-Log -Message "=== FRONTEND VALIDATION RESULTS ===" -Level INFO -LogFile $LogFile
+  foreach ($result in $results) {
+    $level = if ($result -like "✅*") { "SUCCESS" } elseif ($result -like "⚠️*") { "WARN" } else { "ERROR" }
+    Write-Log -Message $result -Level $level -LogFile $LogFile
   }
-    
-  $successCount = ($validationResults | Where-Object { $_ -like "✅*" }).Count
-  $warningCount = ($validationResults | Where-Object { $_ -like "⚠️*" }).Count
-  $failureCount = ($validationResults | Where-Object { $_ -like "❌*" }).Count
-  $totalChecks = $validationResults.Count
-    
-  Write-Log ""
-  Write-Log "=== VALIDATION SUMMARY ===" "INFO"
-  if ($failureCount -eq 0 -and $warningCount -eq 0) {
-    Write-Log "Frontend Validation Complete: $successCount/$totalChecks checks passed!" "SUCCESS"
-    Write-Log "React frontend fully ready for Jarvis AI" "SUCCESS"
-  }
-  elseif ($failureCount -eq 0) {
-    Write-Log "Frontend Validation: $successCount/$totalChecks ready, $warningCount warnings" "WARN"
-    Write-Log "Core frontend functionality available" "SUCCESS"
-  }
-  else {
-    Write-Log "Frontend Validation: $successCount/$totalChecks passed, $failureCount failed, $warningCount warnings" "ERROR"
-    Write-Log "Some frontend components need attention" "ERROR"
-  }
-    
+  $successCount = ($results | Where-Object { $_ -like "✅*" }).Count
+  $failureCount = ($results | Where-Object { $_ -like "❌*" }).Count
+  Write-Log -Message "Validation: $successCount/$($results.Count) checks passed" -Level ($failureCount -eq 0 ? "SUCCESS" : "ERROR") -LogFile $LogFile
   return $failureCount -eq 0
 }
 
+function Start-DevServer {
+  param([string]$LogFile)
+  Write-Log -Message "Starting React development server..." -Level INFO -LogFile $LogFile
+  Write-Log -Message "Frontend URL: http://localhost:3000" -Level INFO -LogFile $LogFile
+  Write-Log -Message "Backend URL: http://localhost:8000 (required)" -Level INFO -LogFile $LogFile
+  # Check backend status
+  try {
+    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
+    Write-Log -Message "Backend detected - full functionality available" -Level SUCCESS -LogFile $LogFile
+  }
+  catch {
+    Write-Log -Message "Backend not detected - start with: .\run_backend.ps1" -Level WARN -LogFile $LogFile
+  }
+  Write-Log -Message "Press Ctrl+C to stop the server" -Level WARN -LogFile $LogFile
+  Push-Location frontend
+  try { npm start }
+  catch { Write-Log -Message "Failed to start server: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile }
+  finally { Pop-Location }
+}
+
 # Main execution
-Write-Log "JARVIS React Frontend Setup (v4) Starting..." "SUCCESS"
-Write-SystemInfo
-
-# Check prerequisites
-if (-not (Test-NodeInstalled)) {
-  Write-Log "Node.js not found. Please run 01-Prerequisites.ps1 first to install it." "ERROR"
-  Stop-Transcript
-  exit 1
-}
-
-if (-not (Test-BackendExists)) {
-  Write-Log "Backend not found. Please run scripts 02-04 first to set up the backend." "ERROR"
-  Stop-Transcript
-  exit 1
-}
-
-# Check if frontend already exists and is complete
-$frontendComplete = $false
-if ((Test-Path "frontend/package.json") -and 
-  (Test-Path "frontend/src/components/Chat.tsx") -and 
-  (Test-Path "frontend/src/services/api.ts") -and 
-  (Test-Path "run_frontend.ps1")) {
-  Write-Log "Frontend already exists and appears complete" "SUCCESS"
-  $frontendComplete = $true
-}
-
-# Default behavior: Setup frontend unless already complete OR specific switches used
-$shouldSetup = $false
-if ($Install -or $All) {
-  $shouldSetup = $true
-  Write-Log "Frontend setup requested via switches" "INFO"
-}
-elseif (-not $frontendComplete) {
-  $shouldSetup = $true
-  Write-Log "Frontend not complete - running default setup" "INFO"
-}
-
-# Setup operations (default behavior like scripts 01-04)
-if ($shouldSetup) {
-  Write-Log ""
-  Write-Log "Setting up React frontend..." "INFO"
-    
-  $setupResults = @()
-    
-  $setupResults += @{Name = "Frontend Structure"; Success = (New-FrontendStructure) }
-    
-  if ($setupResults[-1].Success) {
-    $setupResults += @{Name = "Frontend Dependencies"; Success = (Install-FrontendDependencies) }
-    $setupResults += @{Name = "CSS Styling"; Success = (New-StylingAndComponents) }
-    $setupResults += @{Name = "API Service"; Success = (New-ApiService) }
-    $setupResults += @{Name = "TypeScript Types"; Success = (New-TypeDefinitions) }
-    $setupResults += @{Name = "Chat Hook"; Success = (New-ChatHook) }
-    $setupResults += @{Name = "Chat Component"; Success = (New-ChatComponent) }
-    $setupResults += @{Name = "App Component"; Success = (New-AppComponent) }
-    $setupResults += @{Name = "Environment Config"; Success = (New-EnvironmentConfig) }
-    $setupResults += @{Name = "Package Scripts"; Success = (Update-PackageJsonScripts) }
-    $setupResults += @{Name = "Run Script"; Success = (New-FrontendRunScript) }
-        
-    # Clean up any conflicting packages after component creation
-    Push-Location
-    try {
-      Set-Location frontend
-      Write-Log "Final cleanup of conflicting packages..." "INFO"
-      $cleanupResult = npm uninstall tailwindcss @tailwindcss/typography @tailwindcss/postcss autoprefixer postcss framer-motion --silent 2>$null
-      Remove-Item "tailwind.config.js" -Force -ErrorAction SilentlyContinue
-      Remove-Item "postcss.config.js" -Force -ErrorAction SilentlyContinue
-      Write-Log "Package cleanup completed" "SUCCESS"
-    }
-    catch {
-      Write-Log "Package cleanup had minor issues (this is normal)" "INFO"
-    }
-    finally {
-      Pop-Location
-    }
-  }
-    
-  # Setup summary
-  Write-Log ""
-  Write-Log "=== SETUP SUMMARY ===" "INFO"
-    
-  $successfulSetups = 0
-  $failedSetups = 0
-    
-  foreach ($result in $setupResults) {
-    if ($result.Success) {
-      Write-Log "$($result.Name) - SUCCESS" "SUCCESS"
-      $successfulSetups++
-    }
-    else {
-      Write-Log "$($result.Name) - FAILED" "ERROR"
-      $failedSetups++
-    }
-  }
-    
-  Write-Log ""
-  Write-Log "Setup Results: $successfulSetups successful, $failedSetups failed" "INFO"
-    
-  if ($successfulSetups -gt 0 -and $failedSetups -eq 0) {
-    Write-Log "Frontend setup completed with inline-styled components!" "SUCCESS"
-  }
-  elseif ($successfulSetups -gt 0) {
-    Write-Log "Frontend setup completed with some issues" "WARN"
-  }
-  else {
-    Write-Log "Frontend setup failed" "ERROR"
+try {
+  if (-not (Test-Prerequisites -LogFile $logFile)) {
     Stop-Transcript
     exit 1
   }
-}
-
-# Build operations
-if ($Build -or $All) {
-  Write-Log ""
-  if ($shouldSetup -or (Test-Path "frontend/package.json")) {
-    Build-FrontendProduction | Out-Null
+  $setupResults = @()
+  if ($Install -or $Run) {
+    Write-Log -Message "Setting up React frontend..." -Level INFO -LogFile $logFile
+    $setupResults += @{Name = "React App Creation"; Success = (New-ReactApp -LogFile $logFile) }
+    if ($setupResults[-1].Success) {
+      $setupResults += @{Name = "Dependencies"; Success = (Install-Dependencies -LogFile $logFile) }
+      $setupResults += @{Name = "Frontend Files"; Success = (New-FrontendFiles -LogFile $logFile) }
+      $setupResults += @{Name = "Run Script"; Success = (New-RunScript -LogFile $logFile) }
+    }
+    # Summary
+    Write-Log -Message "=== SETUP SUMMARY ===" -Level INFO -LogFile $logFile
+    $successCount = 0
+    $failCount = 0
+    foreach ($result in $setupResults) {
+      if ($result.Success) {
+        Write-Log -Message "$($result.Name) - SUCCESS" -Level SUCCESS -LogFile $logFile
+        $successCount++
+      }
+      else {
+        Write-Log -Message "$($result.Name) - FAILED" -Level ERROR -LogFile $logFile
+        $failCount++
+      }
+    }
+    Write-Log -Message "Setup Results: $successCount successful, $failCount failed" -Level INFO -LogFile $logFile
+    if ($failCount -gt 0) {
+      Write-Log -Message "Frontend setup had failures" -Level ERROR -LogFile $logFile
+      Stop-Transcript
+      exit 1
+    }
   }
+    
+  if ($Configure -or $Run) {
+    Write-Log -Message "Configuring frontend environment..." -Level INFO -LogFile $logFile
+    Test-EnvironmentConfig -LogFile $logFile | Out-Null
+  }
+    
+  if ($Test -or $Run) { Test-FrontendSetup -LogFile $logFile | Out-Null }
+    
+  if ($Run) { Start-DevServer -LogFile $logFile }
   else {
-    Write-Log "Skipping build - frontend not available" "WARN"
+    Write-Log -Message "=== NEXT STEPS ===" -Level INFO -LogFile $logFile
+    Write-Log -Message "1. .\05-ReactFrontend.ps1 -Run        # Start development server" -Level INFO -LogFile $logFile
+    Write-Log -Message "2. .\run_frontend.ps1                 # Quick start script" -Level INFO -LogFile $logFile
+    Write-Log -Message "3. .\run_backend.ps1                  # Start backend (separate terminal)" -Level INFO -LogFile $logFile
+    Write-Log -Message "" -Level INFO -LogFile $logFile
+    Write-Log -Message "URLs:" -Level INFO -LogFile $logFile
+    Write-Log -Message "Frontend: http://localhost:3000" -Level INFO -LogFile $logFile
+    Write-Log -Message "Backend:  http://localhost:8000/docs" -Level INFO -LogFile $logFile
   }
 }
-
-# Always show comprehensive validation
-Write-Log ""
-Test-FrontendSetup | Out-Null
-
-# Run operations (like 02-SimpleFastApiBackend.ps1)
-if ($Run -or $All) {
-  Write-Log ""
-  if ($shouldSetup -or (Test-Path "frontend/package.json")) {
-    Start-DevelopmentServer
-  }
-  else {
-    Write-Log "Cannot start server - frontend not available" "WARN"
-  }
+catch {
+  Write-Log -Message "Error: $_" -Level ERROR -LogFile $logFile
+  Stop-Transcript
+  exit 1
 }
 
-# Next steps guidance (only show if no setup was performed and switches weren't used)
-if (-not $shouldSetup -and -not ($Build -or $Run -or $All)) {
-  Write-Log ""
-  Write-Log "=== NEXT STEPS ===" "INFO"
-  Write-Log "Frontend is already set up. Available actions:" "INFO"
-  Write-Log "1. .\05-ReactFrontend.ps1 -Build        # Build for production" "INFO"
-  Write-Log "2. .\05-ReactFrontend.ps1 -Run          # Start frontend server" "INFO"
-  Write-Log ""
-  Write-Log "Daily usage scripts:" "INFO"
-  Write-Log "   .\run_backend.ps1   # Terminal 1" "INFO"
-  Write-Log "   .\run_frontend.ps1  # Terminal 2" "INFO"
-}
-else {
-  # Show next steps after setup (like 02-SimpleFastApiBackend.ps1)
-  if (-not ($Run -or $All)) {
-    Write-Log ""
-    Write-Log "=== NEXT STEPS ===" "INFO"
-    Write-Log "1. .\05-ReactFrontend.ps1 -Build        # Build for production" "INFO"
-    Write-Log "2. .\05-ReactFrontend.ps1 -Run          # Start frontend server" "INFO"
-    Write-Log ""
-    Write-Log "Or run everything:" "INFO"
-    Write-Log ".\05-ReactFrontend.ps1 -All" "INFO"
-    Write-Log ""
-    Write-Log "Daily usage scripts:" "INFO"
-    Write-Log "   .\run_backend.ps1   # Terminal 1" "INFO"
-    Write-Log "   .\run_frontend.ps1  # Terminal 2" "INFO"
-  }
-}
-
-# Show system ready status if everything looks good
-$currentValidation = Test-FrontendSetup
-if ($currentValidation -and (Test-Path "frontend/src/components/Chat.tsx")) {
-  Write-Log ""
-  Write-Log "System Ready - Quick Start Commands:" "SUCCESS"
-  Write-Log "# Start both servers (use separate terminals):" "INFO"
-  Write-Log ".\run_backend.ps1" "INFO"
-  Write-Log ".\run_frontend.ps1" "INFO"
-  Write-Log ""
-  Write-Log "# Then visit:" "INFO"
-  Write-Log "http://localhost:3000    # Chat Interface" "INFO"
-  Write-Log "http://localhost:8000/docs # API Documentation" "INFO"
-}
-
-Write-Log ""
-Write-Log "Log Files Created:" "INFO"
-Write-Log "Full transcript: $transcriptFile" "INFO"
-Write-Log "Structured log: $logFile" "INFO"
-
-Write-Log ""
-Write-Log "JARVIS React Frontend Setup (v4) Complete!" "SUCCESS"
-
-# Stop transcript
+Write-Log -Message "${scriptPrefix} v${scriptVersion} complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript
