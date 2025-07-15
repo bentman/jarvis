@@ -1,6 +1,7 @@
 # 03-IntegrateOllama.ps1 - AI integration into FastAPI backend
 # Purpose: Add Ollama-based AIService, personality config, and tests
-# Last edit: 2025-07-11 - Aligned to J.A.R.V.I.S. standards
+# Last edit: 2025-07-14 - add Get-AvailableHardware call to determine hardware info
+
 param(
     [switch]$Install,
     [switch]$Configure,
@@ -10,23 +11,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
-$scriptVersion = "4.2.2"
+
+$scriptVersion = "4.3.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$transcriptFile = Join-Path $logsDir "$scriptPrefix-transcript-$timestamp.txt"
-$logFile = Join-Path $logsDir "$scriptPrefix-log-$timestamp.txt"
+$transcriptFile = Join-Path $logsDir "${scriptPrefix}-transcript-$timestamp.txt"
+$logFile = Join-Path $logsDir "${scriptPrefix}-log-$timestamp.txt"
+
 New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
 Start-Transcript -Path $transcriptFile
 Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
 
-# Default to full Run if no switch provided
-if (-not ($Install -or $Configure -or $Test -or $Run)) {
-    $Run = $true
-}
+if (-not ($Install -or $Configure -or $Test)) { $Run = $true }
 
-$setupResults = @()
 Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
     Install   = $Install
     Configure = $Configure
@@ -34,15 +33,7 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
     Run       = $Run
 }
 
-# Setup logging
-$projectRoot = Get-Location
-$logsDir = Join-Path $projectRoot "logs"
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$transcriptFile = Join-Path $logsDir "03-ai-integration-transcript-$timestamp.txt"
-$logFile = Join-Path $logsDir "03-ai-integration-log-$timestamp.txt"
-
-New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
-Start-Transcript -Path $transcriptFile
+$hardware = Get-AvailableHardware -LogFile $logFile
 
 # Test if backend exists
 function Test-BackendExists {
@@ -720,15 +711,6 @@ function Test-AIIntegrationSetup {
     Write-Log -Message "AI Integration: $successCount/$($validationResults.Count) passed, $failureCount failed, $warningCount warnings" -Level ($failureCount -eq 0 ? "SUCCESS" : "ERROR") -LogFile $LogFile
     
     return $failureCount -eq 0
-}
-
-# Main execution
-Write-Log -Message "JARVIS AI Integration Setup (v4.1) Starting..." -Level "SUCCESS" -LogFile $logFile
-Write-SystemInfo -ScriptName "03-AIIntegration.ps1" -Version "4.1" -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
-    Install   = $Install
-    Test      = $Test
-    Configure = $Configure
-    Run       = $Run
 }
 
 if (-not (Test-BackendExists -LogFile $logFile)) {

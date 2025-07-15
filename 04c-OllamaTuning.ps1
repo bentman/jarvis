@@ -1,6 +1,6 @@
 # 04c-OllamaTuning.ps1 - Ollama Hardware Tuning and Configuration
 # Purpose: Detects, prioritizes, and configures optimal hardware (NPU/GPU/CPU) for Ollama LLM inference.
-# Last edit: 2025-07-11 - Standardized (J.A.R.V.I.S. project); all logic preserved.
+# Last edit: 2025-07-14 - Integrated Get-AvailableHardware for simplified hardware detection
 
 param(
     [switch]$Install,
@@ -11,24 +11,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
-$scriptVersion = "4.2.2"
+
+$scriptVersion = "4.3.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$transcriptFile = Join-Path $logsDir "$scriptPrefix-transcript-$timestamp.txt"
-$logFile = Join-Path $logsDir "$scriptPrefix-log-$timestamp.txt"
+$transcriptFile = Join-Path $logsDir "${scriptPrefix}-transcript-$timestamp.txt"
+$logFile = Join-Path $logsDir "${scriptPrefix}-log-$timestamp.txt"
 
 New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
 Start-Transcript -Path $transcriptFile
 Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
 
-# Default to full Run if no switch provided
-if (-not ($Install -or $Configure -or $Test -or $Run)) {
-    $Run = $true
-}
+if (-not ($Install -or $Configure -or $Test)) { $Run = $true }
 
-$setupResults = @()
 Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
     Install   = $Install
     Configure = $Configure
@@ -36,170 +33,7 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
     Run       = $Run
 }
 
-# Hardware detection
-function Get-GPUInfo {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
-    Write-Log -Message "Detecting hardware for Ollama..." -Level "INFO" -LogFile $LogFile
-    try {
-        $gpus = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notlike "*Microsoft Remote Display Adapter*" }
-        $processors = Get-CimInstance Win32_Processor
-        $npus = @()
-        foreach ($proc in $processors) {
-            $procName = $proc.Name
-            if ($procName -like "*Snapdragon*" -and $procName -like "*X*") {
-                $npus += [PSCustomObject]@{
-                    Name          = "Qualcomm Hexagon NPU ($procName)"
-                    DriverVersion = "N/A"
-                    PNPDeviceID   = "QUALCOMM_NPU"
-                }
-            }
-            elseif ($procName -like "*Core*Ultra*" -and ($procName -like "*125*" -or $procName -like "*155*" -or $procName -like "*165*")) {
-                $npus += [PSCustomObject]@{
-                    Name          = "Intel AI Boost NPU ($procName)"
-                    DriverVersion = "N/A"
-                    PNPDeviceID   = "INTEL_NPU"
-                }
-            }
-        }
-
-        Write-Log -Message "Detected Devices:" -Level "INFO" -LogFile $LogFile
-        if ($npus) {
-            foreach ($npu in $npus) {
-                Write-Log -Message "  - NPU: $($npu.Name)" -Level "INFO" -LogFile $LogFile
-            }
-        }
-        else {
-            Write-Log -Message "  - No NPUs detected" -Level "INFO" -LogFile $LogFile
-        }
-        if ($gpus) {
-            foreach ($gpu in $gpus) {
-                Write-Log -Message "  - GPU: $($gpu.Name) (Driver: $($gpu.DriverVersion))" -Level "INFO" -LogFile $LogFile
-            }
-        }
-        else {
-            Write-Log -Message "  - No GPUs detected" -Level "INFO" -LogFile $LogFile
-        }
-
-        $allDevices = @()
-        foreach ($npu in $npus) {
-            $allDevices += [PSCustomObject]@{
-                Type          = "NPU"
-                Name          = $npu.Name
-                DriverVersion = $npu.DriverVersion
-                Priority      = 1
-            }
-        }
-        foreach ($gpu in $gpus) {
-            $priority = if ($gpu.Name -match "NVIDIA|AMD") { 2 }
-            elseif ($gpu.Name -match "Intel|Qualcomm.*Adreno") { 3 }
-            else { 4 }
-            $allDevices += [PSCustomObject]@{
-                Type          = "GPU"
-                Name          = $gpu.Name
-                DriverVersion = $gpu.DriverVersion
-                Priority      = $priority
-            }
-        }
-
-        if (-not $allDevices) {
-            $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-            $allDevices += [PSCustomObject]@{
-                Type          = "CPU"
-                Name          = $cpu.Name
-                DriverVersion = "N/A"
-                Priority      = 5
-            }
-            Write-Log -Message "No NPU or GPU detected, falling back to CPU" -Level "WARN" -LogFile $LogFile
-        }
-
-        $selectedDevice = $allDevices | Sort-Object Priority | Select-Object -First 1
-        if ($selectedDevice) {
-            $name = $selectedDevice.Name
-            $driverVersion = $selectedDevice.DriverVersion
-            $deviceType = $selectedDevice.Type
-            $cudaAvailable = if ($deviceType -eq "GPU" -and $name -match "NVIDIA" -and (Test-Command -Command "nvidia-smi" -LogFile $LogFile)) { "Yes" } else { "No" }
-            Write-Log -Message "Selected ${deviceType}: $name (Driver: $driverVersion, CUDA: $cudaAvailable)" -Level "SUCCESS" -LogFile $LogFile
-            return @{Name = $name; DriverVersion = $driverVersion; CudaAvailable = $cudaAvailable; Type = $deviceType }
-        }
-        Write-Log -Message "No valid device selected" -Level "ERROR" -LogFile $LogFile
-        return $null
-    }
-    catch {
-        Write-Log -Message "Device detection failed: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-        Write-Log -Message "Falling back to CPU: $($cpu.Name)" -Level "WARN" -LogFile $LogFile
-        return @{Name = $cpu.Name; DriverVersion = "N/A"; CudaAvailable = "No"; Type = "CPU" }
-    }
-}
-
-# Hardware configuration
-function Get-HardwareConfiguration {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
-    Write-Log -Message "Detecting hardware acceleration capabilities..." -Level "INFO" -LogFile $LogFile
-    $hardware = @{
-        CPU           = @{Name = ""; Cores = 0; Architecture = "" }
-        GPU           = @{Available = $false; Type = "None"; Name = ""; VRAM = 0; CUDACapable = $false }
-        NPU           = @{Available = $false; Type = "None"; Name = ""; TOPS = 0 }
-        OptimalConfig = "CPU"
-        Platform      = ""
-    }
-    
-    try {
-        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-        $hardware.CPU.Name = $cpu.Name
-        $hardware.CPU.Cores = $cpu.NumberOfLogicalProcessors
-        $hardware.CPU.Architecture = $cpu.Architecture
-        $hardware.Platform = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $cpu.Name -like "*Snapdragon*") { "ARM64" } else { "x64" }
-        
-        $deviceInfo = Get-GPUInfo -LogFile $LogFile
-        if ($deviceInfo.Type -eq "NPU") {
-            $hardware.NPU.Available = $true
-            $hardware.NPU.Name = $deviceInfo.Name
-            $hardware.NPU.Type = if ($deviceInfo.Name -like "*Qualcomm*") { "Qualcomm_Hexagon" } else { "Intel_AI_Boost" }
-            $hardware.NPU.TOPS = if ($deviceInfo.Name -like "*Snapdragon*") { 45 } else { 34 }
-            $hardware.OptimalConfig = if ($hardware.NPU.Type -eq "Qualcomm_Hexagon") { "Qualcomm_NPU" } else { "Intel_NPU" }
-        }
-        elseif ($deviceInfo.Type -eq "GPU") {
-            $hardware.GPU.Available = $true
-            $hardware.GPU.Name = $deviceInfo.Name
-            $hardware.GPU.CUDACapable = $deviceInfo.CudaAvailable -eq "Yes"
-            if ($deviceInfo.Name -like "*NVIDIA*") {
-                $hardware.GPU.Type = "NVIDIA"
-                $hardware.GPU.VRAM = if ($deviceInfo.Name -like "*GTX 1650*") { 4 } else { 8 }
-                $hardware.OptimalConfig = "NVIDIA_GPU"
-            }
-            elseif ($deviceInfo.Name -like "*AMD*") {
-                $hardware.GPU.Type = "AMD"
-                $hardware.GPU.VRAM = 8
-                $hardware.OptimalConfig = "AMD_GPU"
-            }
-            elseif ($deviceInfo.Name -like "*Intel*Arc*") {
-                $hardware.GPU.Type = "Intel_Arc"
-                $hardware.GPU.VRAM = 8
-                $hardware.OptimalConfig = "Intel_GPU"
-            }
-            elseif ($deviceInfo.Name -like "*Qualcomm*Adreno*") {
-                $hardware.GPU.Type = "Qualcomm_Adreno"
-                $hardware.GPU.VRAM = 4
-                $hardware.OptimalConfig = "Qualcomm_Adreno"
-            }
-        }
-        Write-Log -Message "Platform: $($hardware.Platform), Optimal Config: $($hardware.OptimalConfig)" -Level "SUCCESS" -LogFile $LogFile
-        return $hardware
-    }
-    catch {
-        Write-Log -Message "Hardware detection error: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        return $hardware
-    }
-}
+$hardware = Get-AvailableHardware -LogFile $logFile
 
 # Personality traits import
 function Import-PersonalityTraits {
@@ -238,84 +72,12 @@ function Test-CUDAInstallation {
     Write-Log -Message "Checking CUDA status..." -Level "INFO" -LogFile $LogFile
     $cudaStatus = @{Installed = $false; Version = ""; Path = "" }
     
-    try {
-        # First check if nvcc command exists
-        if (Test-Command -Command "nvcc" -LogFile $LogFile) {
-            # Capture both stdout and stderr
-            $nvccOutput = & nvcc --version 2>&1 | Out-String
-            Write-Log -Message "nvcc output: $nvccOutput" -Level "INFO" -LogFile $LogFile
-            
-            # Check if command executed successfully
-            if ($LASTEXITCODE -eq 0 -and $nvccOutput) {
-                # Try to extract version with more flexible regex patterns
-                if ($nvccOutput -match "release\s+(\d+\.\d+)") {
-                    $cudaStatus.Installed = $true
-                    $cudaStatus.Version = $matches[1]
-                    Write-Log -Message "CUDA detected: version $($cudaStatus.Version)" -Level "SUCCESS" -LogFile $LogFile
-                }
-                elseif ($nvccOutput -match "V(\d+\.\d+\.\d+)") {
-                    # Alternative version format (matches your V12.9.86)
-                    $cudaStatus.Installed = $true
-                    $cudaStatus.Version = $matches[1]
-                    Write-Log -Message "CUDA detected: version $($cudaStatus.Version)" -Level "SUCCESS" -LogFile $LogFile
-                }
-                elseif ($nvccOutput -match "release\s+(\d+\.\d+),\s+V(\d+\.\d+\.\d+)") {
-                    # Matches format like "release 12.9, V12.9.86"
-                    $cudaStatus.Installed = $true
-                    $cudaStatus.Version = $matches[1]
-                    Write-Log -Message "CUDA detected: version $($cudaStatus.Version) (full: V$($matches[2]))" -Level "SUCCESS" -LogFile $LogFile
-                }
-                else {
-                    Write-Log -Message "nvcc found but couldn't parse version from output" -Level "WARN" -LogFile $LogFile
-                    $cudaStatus.Installed = $true
-                    $cudaStatus.Version = "Unknown"
-                }
-            }
-            else {
-                Write-Log -Message "nvcc command failed with exit code: $LASTEXITCODE" -Level "WARN" -LogFile $LogFile
-            }
-        }
-        else {
-            # nvcc not in PATH, check common CUDA installation locations
-            $cudaPaths = @(
-                "$env:ProgramFiles\NVIDIA GPU Computing Toolkit\CUDA",
-                "${env:ProgramFiles(x86)}\NVIDIA GPU Computing Toolkit\CUDA",
-                "$env:CUDA_PATH"
-            )
-            
-            foreach ($basePath in $cudaPaths) {
-                if ($basePath -and (Test-Path $basePath)) {
-                    Write-Log -Message "Checking CUDA path: $basePath" -Level "INFO" -LogFile $LogFile
-                    $cudaDirs = Get-ChildItem -Path $basePath -Directory -ErrorAction SilentlyContinue | 
-                    Where-Object { $_.Name -match "v\d+\.\d+" } |
-                    Sort-Object Name -Descending
-                    
-                    if ($cudaDirs) {
-                        $latestCuda = $cudaDirs[0]
-                        $nvccPath = Join-Path $latestCuda.FullName "bin\nvcc.exe"
-                        
-                        if (Test-Path $nvccPath) {
-                            $cudaStatus.Installed = $true
-                            $cudaStatus.Path = $latestCuda.FullName
-                            # Extract version from directory name
-                            if ($latestCuda.Name -match "v(\d+\.\d+)") {
-                                $cudaStatus.Version = $matches[1]
-                            }
-                            Write-Log -Message "CUDA found at: $($cudaStatus.Path), version: $($cudaStatus.Version)" -Level "SUCCESS" -LogFile $LogFile
-                            break
-                        }
-                    }
-                }
-            }
-        }
-        
-        return $cudaStatus
+    if ($hardware.GPU.Type -eq "NVIDIA" -and $hardware.GPU.CUDACapable) {
+        $cudaStatus.Installed = $true
+        $cudaStatus.Version = "Detected"  # Version could be refined if Get-AvailableHardware provides it
+        Write-Log -Message "CUDA capable NVIDIA GPU detected" -Level "SUCCESS" -LogFile $LogFile
     }
-    catch {
-        Write-Log -Message "CUDA detection error: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        Write-Log -Message "Stack trace: $($_.Exception.StackTrace)" -Level "INFO" -LogFile $LogFile
-        return $cudaStatus
-    }
+    return $cudaStatus
 }
 
 # Install CUDA
@@ -330,7 +92,7 @@ function Install-CUDAToolkit {
         if (Test-Command -Command "winget" -LogFile $LogFile) {
             winget install --id "NVIDIA.CUDA" --silent --accept-package-agreements --accept-source-agreements 2>&1
             if ($LASTEXITCODE -eq 0) {
-                Write-Log -Message "CUDA installed via winget" -Level "SUCCESS" -LogFile $LogFile
+                Write-Log -Message "CUDA installed via winget" -Level ‘SUCCESS’ -LogFile $LogFile
                 return $true
             }
         }
@@ -677,19 +439,8 @@ function Test-OllamaSetup {
 
 try {
     # Main execution
-    Write-Log -Message "JARVIS Ollama Tuning (v4.1) Starting..." -Level "SUCCESS" -LogFile $logFile
-    Write-SystemInfo -ScriptName "04c-OllamaTuning.ps1" -Version "4.1" -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
-        Detect               = $Detect
-        Configure            = $Configure
-        Install              = $Install
-        Test                 = $Test
-        OptimizeModels       = $OptimizeModels
-        InstallOptimalModels = $InstallOptimalModels
-        OptimizeExisting     = $OptimizeExisting
-        Benchmark            = $Benchmark
-        All                  = $All
-    }
-
+    Write-Log -Message "JARVIS Ollama Tuning (v$scriptVersion) Starting..." -Level "SUCCESS" -LogFile $logFile
+    
     if (-not (Test-Command -Command "ollama" -LogFile $logFile)) {
         Write-Log -Message "Ollama not installed. Run 04a-OllamaSetup.ps1 first." -Level "ERROR" -LogFile $logFile
         Stop-Transcript
@@ -697,26 +448,12 @@ try {
     }
 
     $results = @()
-    $lastHardwareDetection = $null
-    $shouldOptimize = $All -or (-not ($Detect -or $Configure -or $Install -or $Test -or $OptimizeModels -or $InstallOptimalModels -or $OptimizeExisting -or $Benchmark))
-
-    if ($Detect -or $shouldOptimize) {
-        Write-Log -Message "=== HARDWARE DETECTION ===" -Level "INFO" -LogFile $logFile
-        $hardware = Get-HardwareConfiguration -LogFile $logFile
-        $cudaStatus = if ($hardware.GPU.Type -eq "NVIDIA") { Test-CUDAInstallation -LogFile $logFile } else { @{Installed = $false } }
-        $lastHardwareDetection = @{Hardware = $hardware; CUDA = $cudaStatus }
-        $results += @{Name = "Hardware Detection"; Success = $null -ne $hardware }
-    
-        Write-Log -Message "Platform: $($hardware.Platform)" -Level "SUCCESS" -LogFile $logFile
-        Write-Log -Message "Optimal Config: $($hardware.OptimalConfig)" -Level "SUCCESS" -LogFile $logFile
-        if ($hardware.NPU.Available) { Write-Log -Message "NPU: $($hardware.NPU.Name) ($($hardware.NPU.TOPS) TOPS)" -Level "SUCCESS" -LogFile $logFile }
-        if ($hardware.GPU.Available) { Write-Log -Message "GPU: $($hardware.GPU.Name) ($($hardware.GPU.VRAM)GB)" -Level "SUCCESS" -LogFile $logFile }
-        Write-Log -Message "CPU: $($hardware.CPU.Name)" -Level "INFO" -LogFile $logFile
-    }
+    $shouldOptimize = $Run -or (-not ($Install -or $Configure -or $Test))
 
     if ($Install -or $shouldOptimize) {
         Write-Log -Message "=== ACCELERATION INSTALLATION ===" -Level "INFO" -LogFile $logFile
-        $installSuccess = if ($lastHardwareDetection.Hardware.GPU.Type -eq "NVIDIA" -and -not $lastHardwareDetection.CUDA.Installed) {
+        $cudaStatus = if ($hardware.GPU.Type -eq "NVIDIA") { Test-CUDAInstallation -LogFile $logFile } else { @{Installed = $false } }
+        $installSuccess = if ($hardware.GPU.Type -eq "NVIDIA" -and -not $cudaStatus.Installed) {
             Install-CUDAToolkit -LogFile $logFile
         }
         else {
@@ -728,37 +465,29 @@ try {
 
     if ($Configure -or $shouldOptimize) {
         Write-Log -Message "=== HARDWARE CONFIGURATION ===" -Level "INFO" -LogFile $logFile
-        $config = Set-OllamaConfiguration -Hardware $lastHardwareDetection.Hardware -CudaStatus $lastHardwareDetection.CUDA -LogFile $logFile
+        $cudaStatus = if ($hardware.GPU.Type -eq "NVIDIA") { Test-CUDAInstallation -LogFile $logFile } else { @{Installed = $false } }
+        $config = Set-OllamaConfiguration -Hardware $hardware -CudaStatus $cudaStatus -LogFile $logFile
         foreach ($inst in $config.Instructions) { Write-Log -Message $inst -Level "INFO" -LogFile $logFile }
         if ($config.RestartRequired) { Write-Log -Message "⚠️ Ollama restart required" -Level "WARN" -LogFile $logFile }
         $results += @{Name = "Ollama Configuration"; Success = $true }
     }
 
-    if ($OptimizeModels -or $InstallOptimalModels -or $shouldOptimize) {
-        Write-Log -Message "=== MODEL OPTIMIZATION ===" -Level "INFO" -LogFile $logFile
-        $results += @{Name = "Model Optimization"; Success = (Optimize-OllamaModels -Hardware $lastHardwareDetection.Hardware -LogFile $logFile) }
-    }
-
-    if ($OptimizeExisting -or $shouldOptimize) {
-        Write-Log -Message "=== EXISTING MODEL CHECK ===" -Level "INFO" -LogFile $logFile
-        $results += @{Name = "Existing Model Check"; Success = (Optimize-OllamaModels -Hardware $lastHardwareDetection.Hardware -LogFile $logFile) }
-    }
-
-    if ($Test -or $Benchmark -or $shouldOptimize) {
+    if ($Test -or $shouldOptimize) {
         Write-Log -Message "=== PERFORMANCE TESTING ===" -Level "INFO" -LogFile $logFile
         $restartSuccess = if (Stop-OllamaService -LogFile $logFile) { Start-OllamaService -LogFile $logFile } else { $false }
-        $benchmarkResult = if ($restartSuccess) { Test-OllamaPerformance -Hardware $lastHardwareDetection.Hardware -LogFile $logFile } else { $null }
+        $benchmarkResult = if ($restartSuccess) { Test-OllamaPerformance -Hardware $hardware -LogFile $logFile } else { $null }
         $results += @{Name = "Performance Benchmark"; Success = $null -ne $benchmarkResult }
+        
+        Write-Log -Message "=== VALIDATION ===" -Level "INFO" -LogFile $logFile
+        $results += @{Name = "Ollama Setup Validation"; Success = (Test-OllamaSetup -Hardware $hardware -LogFile $logFile) }
     }
 
     if ($shouldOptimize) {
         Write-Log -Message "=== PERSONALITY IMPORT ===" -Level "INFO" -LogFile $logFile
         $results += @{Name = "Personality Import"; Success = (Import-PersonalityTraits -LogFile $logFile) }
-    }
-
-    if ($Test -or $shouldOptimize) {
-        Write-Log -Message "=== VALIDATION ===" -Level "INFO" -LogFile $logFile
-        $results += @{Name = "Ollama Setup Validation"; Success = (Test-OllamaSetup -Hardware $lastHardwareDetection.Hardware -LogFile $logFile) }
+        
+        Write-Log -Message "=== MODEL OPTIMIZATION ===" -Level "INFO" -LogFile $logFile
+        $results += @{Name = "Model Optimization"; Success = (Optimize-OllamaModels -Hardware $hardware -LogFile $logFile) }
     }
 
     Write-Log -Message "=== SUMMARY ===" -Level "INFO" -LogFile $logFile
@@ -775,21 +504,19 @@ try {
     }
 
     Write-Log -Message "Log Files: $transcriptFile, $logFile" -Level "INFO" -LogFile $logFile
-    if ($lastHardwareDetection.Hardware.Platform -eq "ARM64") {
+    if ($hardware.Platform -eq "ARM64") {
         Write-Log -Message "ARM64 optimizations active for NPU" -Level "SUCCESS" -LogFile $logFile
     }
-    Write-Log -Message "JARVIS Ollama Tuning (v4.1) Complete!" -Level "SUCCESS" -LogFile $logFile
-
+    Write-Log -Message "JARVIS Ollama Tuning (v$scriptVersion) Complete!" -Level "SUCCESS" -LogFile $logFile
 
     # === Colorized summary output ===
-    $successCount = ($setupResults | Where-Object { $_.Success }).Count
-    $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
+    $successCount = ($results | Where-Object { $_.Success }).Count
+    $failCount = ($results | Where-Object { -not $_.Success }).Count
     Write-Host "SUCCESS: $successCount" -ForegroundColor Green
     Write-Host "FAILED: $failCount" -ForegroundColor Red
-    foreach ($result in $setupResults) {
+    foreach ($result in $results) {
         $fg = if ($result.Success) { "Green" } else { "Red" }
-        $msg = if ($result.Output -and $result.Output.info) { " ($($result.Output.info))" } else { "" }
-        Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')$msg" -ForegroundColor $fg
+        Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -ForegroundColor $fg
     }
     Write-Log -Message "Tuning complete." -Level SUCCESS -LogFile $logFile
 }

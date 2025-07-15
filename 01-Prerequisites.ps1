@@ -1,6 +1,6 @@
 # 01-Prerequisites.ps1 - Install and validate all core system dependencies for JARVIS AI Assistant
 # Purpose: Idempotently install Git, Node.js, VSCode, Visual C++ Build Tools, Python 3.12+, Ollama (no Docker/WSL/VSCode ext)
-# Last edit: 2025-07-10 - switch pattern, start/finish version logs, minimal header
+# Last edit: 2025-07-14 - add Get-AvailableHardware call to determine hardware info
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.2.2"
+$scriptVersion = "4.3.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -20,10 +20,11 @@ $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $transcriptFile = Join-Path $logsDir "${scriptPrefix}-transcript-$timestamp.txt"
 $logFile = Join-Path $logsDir "${scriptPrefix}-log-$timestamp.txt"
 
-# Prepare log directory and start transcript
 New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
 Start-Transcript -Path $transcriptFile
 Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
+
+if (-not ($Install -or $Configure -or $Test)) { $Run = $true }
 
 Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
     Install   = $Install
@@ -32,11 +33,10 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
     Run       = $Run
 }
 
-# Default to "all" if no switches are provided:
-$runAll = -not ($Install -or $Configure -or $Test -or $Run)
+$hardware = Get-AvailableHardware -LogFile $logFile
 
 try {
-    if ($runAll -or $Install) {
+    if ($Run -or $Install) {
         # --- Ensure winget is available, install if possible (never as a function)
         if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
             Write-Log -Message "winget not found. Attempting to install or enable winget..." -Level WARN -LogFile $logFile

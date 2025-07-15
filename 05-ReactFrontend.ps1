@@ -1,6 +1,6 @@
 # 05-ReactFrontend.ps1 - React Frontend Build and Integration
 # Purpose: Create React frontend with inline-styled components for Jarvis AI
-# Last edit: 2025-07-12 - Simplified and corrected errors
+# Last edit: 2025-07-15 - Reformatted according to project instructions
 
 param(
   [switch]$Install,
@@ -11,7 +11,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
-$scriptVersion = "4.2.3"
+
+$scriptVersion = "4.3.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -23,8 +24,7 @@ New-DirectoryStructure -Directories @($logsDir) -LogFile $logFile
 Start-Transcript -Path $transcriptFile
 Write-Log -Message "=== $($MyInvocation.MyCommand.Name) v$scriptVersion ===" -Level INFO -LogFile $logFile
 
-# Default to full Run if no switch provided
-if (-not ($Install -or $Configure -or $Test -or $Run)) { $Run = $true }
+if (-not ($Install -or $Configure -or $Test)) { $Run = $true }
 
 Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot $projectRoot -LogFile $logFile -Switches @{
   Install   = $Install
@@ -32,6 +32,8 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
   Test      = $Test
   Run       = $Run
 }
+
+$hardware = Get-AvailableHardware -LogFile $logFile
 
 function Test-Prerequisites {
   param([string]$LogFile)
@@ -905,12 +907,8 @@ function Test-FrontendSetup {
   )
   $results = @()
   foreach ($check in $checks) {
-    if ($check.IsCommand) {
-      $status = Test-Command -Command $check.Path -LogFile $LogFile
-    }
-    else {
-      $status = Test-Path $check.Path
-    }
+    if ($check.IsCommand) { $status = Test-Command -Command $check.Path -LogFile $LogFile }
+    else { $status = Test-Path $check.Path }
     $results += "$($status ? '✅' : '❌') $($check.Name)"
   }
     
@@ -928,16 +926,10 @@ function Test-FrontendSetup {
         $results += "$($hasLucide ? '✅' : '❌') Package: lucide-react"
         $results += "✅ Dependencies: node_modules installed"
       }
-      else {
-        $results += "❌ Dependencies: node_modules not found"
-      }
+      else { $results += "❌ Dependencies: node_modules not found" }
     }
-    catch {
-      $results += "⚠️ Dependencies: Could not verify"
-    }
-    finally {
-      Pop-Location
-    }
+    catch { $results += "⚠️ Dependencies: Could not verify" }
+    finally { Pop-Location }
   }
     
   Write-Log -Message "=== FRONTEND VALIDATION RESULTS ===" -Level INFO -LogFile $LogFile
@@ -1014,7 +1006,26 @@ try {
   }
     
   if ($Test -or $Run) { Test-FrontendSetup -LogFile $logFile | Out-Null }
-    
+
+  # Cleanup .git folder and .gitignore if all setup is complete
+  $gitFolderPath = ".\frontend\.git\"
+  if (Test-Path $gitFolderPath) {
+    try {
+      Remove-Item -Path $gitFolderPath -Recurse -Force -ErrorAction Stop
+      Write-Log -Message "Removed .git folder from frontend directory" -Level "SUCCESS" -LogFile $logFile
+    }
+    catch { Write-Log -Message "Failed to remove .git folder: $_" -Level "WARN" -LogFile $logFile }
+  }
+
+  $gitIgnorePath = ".\frontend\.gitignore"
+  if (Test-Path $gitIgnorePath) {
+    try {
+      Remove-Item -Path $gitIgnorePath -Force -ErrorAction Stop
+      Write-Log -Message "Removed .gitignore file from frontend directory" -Level "SUCCESS" -LogFile $logFile
+    }
+    catch { Write-Log -Message "Failed to remove .gitignore file: $_" -Level "WARN" -LogFile $logFile }
+  }
+
   if ($Run) { Start-DevServer -LogFile $logFile }
   else {
     Write-Log -Message "=== NEXT STEPS ===" -Level INFO -LogFile $logFile
