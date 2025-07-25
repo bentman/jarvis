@@ -1,6 +1,6 @@
 # 03-IntegrateOllama.ps1 - AI integration into FastAPI backend
 # Purpose: Add Ollama-based AIService, personality config, and tests
-# Last edit: 2025-07-14 - add Get-AvailableHardware call to determine hardware info
+# Last edit: 2025-07-21 - fix virtual environment handling, add auto-creation if missing
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.3.0"
+$scriptVersion = "4.4.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -35,34 +35,28 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
 
 $hardware = Get-AvailableHardware -LogFile $logFile
 
+# Script-level path variables (matching 02-FastApiBackend.ps1 pattern)
+$backendDir = Join-Path $projectRoot "backend"
+$venvDir = Join-Path $backendDir ".venv"
+$venvPy = Join-Path $venvDir "Scripts\python.exe"
+
 # Test if backend exists
 function Test-BackendExists {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     $exists = (Test-Path "backend/api/main.py") -and (Test-Path "backend/requirements.txt")
-    if (-not $exists) {
-        Write-Log -Message "Backend not found. Please run 02-FastApiBackend.ps1 first." -Level "ERROR" -LogFile $LogFile
-    }
+    if (-not $exists) { Write-Log -Message "Backend not found. Please run 02-FastApiBackend.ps1 first." -Level "ERROR" -LogFile $LogFile }
     return $exists
 }
 
 # Add Ollama dependency to backend
 function Add-OllamaDependency {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Adding Ollama client to backend requirements..." -Level "INFO" -LogFile $LogFile
     $requirementsPath = "backend/requirements.txt"
     if (-not (Test-Path $requirementsPath)) {
         Write-Log -Message "Backend requirements.txt not found - run 02-FastApiBackend.ps1 first" -Level "ERROR" -LogFile $LogFile
         return $false
     }
-    
     $requirements = Get-Content $requirementsPath
     if ($requirements -notcontains "ollama>=0.4.5") {
         $requirements += ""
@@ -85,18 +79,13 @@ function Add-OllamaDependency {
 
 # Create personality configuration
 function New-PersonalityConfig {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Creating personality configuration..." -Level "INFO" -LogFile $LogFile
     $personalityPath = "jarvis_personality.json"
     if (Test-Path $personalityPath) {
         Write-Log -Message "Personality config already exists - skipping creation" -Level "SUCCESS" -LogFile $LogFile
         return $true
     }
-    
     $personalityConfig = @"
 {
   "_comment_purpose": "Jarvis AI Assistant Personality Configuration",
@@ -162,15 +151,10 @@ function New-PersonalityConfig {
 
 # Create AI service module
 function New-AIService {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Creating AI service module..." -Level "INFO" -LogFile $LogFile
     New-DirectoryStructure -Directories @("backend/services") -LogFile $LogFile
     $aiServicePath = "backend/services/ai_service.py"
-    
     if (Test-Path $aiServicePath) {
         $existing = Get-Content $aiServicePath -Raw
         if ($existing -match "ollama" -and $existing -match "AIService" -and $existing -match "os.getenv") {
@@ -178,7 +162,6 @@ function New-AIService {
             return $true
         }
     }
-    
     $aiService = @"
 import ollama
 import asyncio
@@ -358,24 +341,18 @@ ai_service = AIService()
 
 # Update main FastAPI application
 function Update-FastAPIApplication {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Updating main application with AI integration..." -Level "INFO" -LogFile $LogFile
     $mainPath = "backend/api/main.py"
     if (-not (Test-Path $mainPath)) {
         Write-Log -Message "Main application not found - run 02-FastApiBackend.ps1 first" -Level "ERROR" -LogFile $LogFile
         return $false
     }
-    
     $existing = Get-Content $mainPath -Raw
     if ($existing -match "ai_service" -and $existing -match "1\.1\.0") {
         Write-Log -Message "Main application already has AI integration" -Level "SUCCESS" -LogFile $LogFile
         return $true
     }
-    
     Copy-Item $mainPath "$mainPath.backup" -ErrorAction SilentlyContinue
     $updatedMain = @"
 from fastapi import FastAPI
@@ -499,18 +476,13 @@ if __name__ == "__main__":
 
 # Create AI integration tests
 function New-AIIntegrationTests {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Creating AI integration tests..." -Level "INFO" -LogFile $LogFile
     $testPath = "backend/tests/test_ai_integration.py"
     if (Test-Path $testPath) {
         Write-Log -Message "AI integration tests already exist" -Level "SUCCESS" -LogFile $LogFile
         return $true
     }
-    
     $aiTests = @"
 import pytest
 from fastapi.testclient import TestClient
@@ -583,52 +555,54 @@ async def test_ai_service_fallback():
     }
 }
 
-# Install AI dependencies
+# Install AI dependencies (simplified - copy of 02-FastApiBackend.ps1 pattern)
 function Install-AIDependencies {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [string]$LogFile )
     Write-Log -Message "Installing AI integration dependencies..." -Level "INFO" -LogFile $LogFile
-    if (Test-PythonPackageInstalled -PackageName "ollama" -LogFile $LogFile) {
-        Write-Log -Message "Ollama Python package already installed" -Level "SUCCESS" -LogFile $LogFile
-        return $true
-    }
-    
-    if (Install-PythonPackage -PackageName "ollama>=0.4.5" -LogFile $LogFile) {
-        Write-Log -Message "Ollama Python package installed successfully" -Level "SUCCESS" -LogFile $LogFile
-        return $true
-    }
-    Write-Log -Message "Failed to install Ollama Python package" -Level "ERROR" -LogFile $LogFile
-    return $false
-}
-
-# Run AI integration tests
-function Invoke-AIIntegrationTests {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
-    Write-Log -Message "Running AI integration tests..." -Level "INFO" -LogFile $LogFile
-    if (-not (Test-Path "backend/tests/test_ai_integration.py")) {
-        Write-Log -Message "AI integration test files not found" -Level "ERROR" -LogFile $LogFile
+    if (-not (Test-Path $venvPy)) {
+        Write-Log -Message "Virtual environment Python not found at $venvPy - run 02-FastApiBackend.ps1 first" -Level "ERROR" -LogFile $LogFile
         return $false
     }
-    
     try {
-        Push-Location backend
-        $pythonCmd = Get-PythonCommand -LogFile $LogFile
-        if (-not $pythonCmd) {
-            Write-Log -Message "No Python command found for running tests" -Level "ERROR" -LogFile $LogFile
+        Write-Log -Message "Installing requirements..." -Level "INFO" -LogFile $LogFile
+        & $venvPy -m pip install -r (Join-Path $backendDir "requirements.txt") --quiet
+        if ($LASTEXITCODE -eq 0) { Write-Log -Message "Backend requirements installed successfully" -Level "SUCCESS" -LogFile $LogFile }
+        Write-Log -Message "Installing ollama>=0.4.5..." -Level "INFO" -LogFile $LogFile
+        & $venvPy -m pip install ollama>=0.4.5 --quiet
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log -Message "Ollama package installed successfully" -Level "SUCCESS" -LogFile $LogFile
+            return $true
+        }
+        else {
+            Write-Log -Message "Failed to install ollama package" -Level "ERROR" -LogFile $LogFile
             return $false
         }
-        
+    }
+    catch {
+        Write-Log -Message "Error installing dependencies: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
+        return $false
+    }
+}
+
+# Run AI integration tests (simplified - no directory changes)
+function Invoke-AIIntegrationTests {
+    param( [string]$LogFile )
+    Write-Log -Message "Running AI integration tests..." -Level "INFO" -LogFile $LogFile
+    $testFile = Join-Path $backendDir "tests\test_ai_integration.py"
+    if (-not (Test-Path $testFile)) {
+        Write-Log -Message "AI integration test files not found at $testFile" -Level "ERROR" -LogFile $LogFile
+        return $false
+    }
+    if (-not (Test-Path $venvPy)) {
+        Write-Log -Message "Virtual environment Python not found at $venvPy" -Level "ERROR" -LogFile $LogFile
+        return $false
+    }
+    try {
         Write-Log -Message "Executing AI integration tests..." -Level "INFO" -LogFile $LogFile
-        & $pythonCmd -m pytest tests/test_ai_integration.py -v
+        Push-Location $backendDir
+        & $venvPy -m pytest "tests\test_ai_integration.py" -v --tb=short
         if ($LASTEXITCODE -eq 0) {
-            Write-Log -Message "Run AI integration tests passed" -Level "SUCCESS" -LogFile $LogFile
+            Write-Log -Message "AI integration tests passed" -Level "SUCCESS" -LogFile $LogFile
             return $true
         }
         Write-Log -Message "Some AI integration tests failed (exit code: $LASTEXITCODE)" -Level "WARN" -LogFile $LogFile
@@ -638,78 +612,67 @@ function Invoke-AIIntegrationTests {
         Write-Log -Message "Exception during AI test execution: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
         return $false
     }
-    finally {
-        Pop-Location
-    }
+    finally { Pop-Location }
 }
 
 # Validate AI integration setup
 function Test-AIIntegrationSetup {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Validating AI integration setup..." -Level "INFO" -LogFile $LogFile
     $validationResults = @()
-    
     $requiredFiles = @(
-        "backend/requirements.txt",
-        "backend/api/main.py",
-        "backend/services/ai_service.py",
-        "backend/services/__init__.py",
-        "backend/tests/test_ai_integration.py",
-        "jarvis_personality.json"
+        (Join-Path $backendDir "requirements.txt"),
+        (Join-Path $backendDir "api\main.py"),
+        (Join-Path $backendDir "services\ai_service.py"),
+        (Join-Path $backendDir "services\__init__.py"),
+        (Join-Path $backendDir "tests\test_ai_integration.py"),
+        (Join-Path $projectRoot "jarvis_personality.json")
     )
-    
-    foreach ($file in $requiredFiles) {
-        if (Test-Path $file) {
-            $size = (Get-Item $file).Length
-            $validationResults += "✅ File: $file ($size bytes)"
-        }
-        else {
-            $validationResults += "❌ Missing: $file"
-        }
+    foreach ($filePath in $requiredFiles) {
+        $fileName = Split-Path $filePath -Leaf
+        if (Test-Path $filePath) { $validationResults += "✅ File: $fileName" }
+        else { $validationResults += "❌ Missing: $fileName" }
     }
-    
+    # Check packages in virtual environment using script-level variables
     $pythonPackages = @("ollama", "fastapi", "uvicorn")
     foreach ($package in $pythonPackages) {
-        $status = Test-PythonPackageInstalled -PackageName $package -LogFile $LogFile
+        $status = $false
+        if (Test-Path $venvPy) {
+            try {
+                & $venvPy -m pip show $package *>$null
+                $status = $LASTEXITCODE -eq 0
+            }
+            catch { $status = $false }
+        }
         $validationResults += "$($status ? '✅' : '❌') Python Package: $package"
     }
-    
-    if (Test-Path "backend/api/main.py") {
-        $mainContent = Get-Content "backend/api/main.py" -Raw
+    $mainPath = Join-Path $backendDir "api\main.py"
+    if (Test-Path $mainPath) {
+        $mainContent = Get-Content $mainPath -Raw
         $validationResults += ($mainContent -match "ai_service" -and $mainContent -match "1\.1\.0") ? 
         "✅ Backend: AI-enhanced FastAPI (v1.1.0)" : 
         "❌ Backend: Missing AI integration"
     }
-    
-    if (Test-Path "jarvis_personality.json") {
+    $personalityPath = Join-Path $projectRoot "jarvis_personality.json"
+    if (Test-Path $personalityPath) {
         try {
-            $configContent = Get-Content "jarvis_personality.json" -Raw | ConvertFrom-Json
+            $configContent = Get-Content $personalityPath -Raw | ConvertFrom-Json
             $name = $configContent.identity.name
             $displayName = $configContent.identity.display_name
             $validationResults += "✅ Personality Config: $name ($displayName)"
         }
-        catch {
-            $validationResults += "⚠️  Personality Config: File exists but may be malformed"
-        }
+        catch { $validationResults += "⚠️  Personality Config: File exists but may be malformed" }
     }
-    
     $envValid = Test-EnvironmentConfig -LogFile $LogFile
     $validationResults += $envValid ? "✅ Environment Config: Valid" : "❌ Environment Config: Invalid or missing OLLAMA_MODEL"
-    
     Write-Log -Message "=== AI INTEGRATION VALIDATION RESULTS ===" -Level "INFO" -LogFile $LogFile
     foreach ($result in $validationResults) {
         Write-Log -Message $result -Level ($result -like "✅*" ? "SUCCESS" : ($result -like "⚠️*" ? "WARN" : "ERROR")) -LogFile $LogFile
     }
-    
     $successCount = ($validationResults | Where-Object { $_ -like "✅*" }).Count
     $warningCount = ($validationResults | Where-Object { $_ -like "⚠️*" }).Count
     $failureCount = ($validationResults | Where-Object { $_ -like "❌*" }).Count
     Write-Log -Message "AI Integration: $successCount/$($validationResults.Count) passed, $failureCount failed, $warningCount warnings" -Level ($failureCount -eq 0 ? "SUCCESS" : "ERROR") -LogFile $LogFile
-    
     return $failureCount -eq 0
 }
 
@@ -726,31 +689,18 @@ $setupResults += @{Name = "Personality Config"; Success = (New-PersonalityConfig
 $setupResults += @{Name = "AI Service Module"; Success = (New-AIService -LogFile $logFile) }
 $setupResults += @{Name = "FastAPI Enhancement"; Success = (Update-FastAPIApplication -LogFile $logFile) }
 $setupResults += @{Name = "AI Integration Tests"; Success = (New-AIIntegrationTests -LogFile $logFile) }
-
 if ($Install -or $Run) {
     Write-Log -Message "Installing AI dependencies..." -Level "INFO" -LogFile $logFile
     $setupResults += @{Name = "AI Dependencies"; Success = (Install-AIDependencies -LogFile $logFile) }
 }
-elseif (-not (Test-PythonPackageInstalled -PackageName "ollama" -LogFile $logFile)) {
-    Write-Log -Message "Ollama Python package missing - installing automatically..." -Level "INFO" -LogFile $logFile
-    $setupResults += @{Name = "Ollama Package (Auto)"; Success = (Install-AIDependencies -LogFile $logFile) }
-}
-
 if ($Configure -or $Run) {
     Write-Log -Message "Validating environment configuration..." -Level "INFO" -LogFile $logFile
     $setupResults += @{Name = "Environment Update"; Success = (Test-EnvironmentConfig -LogFile $logFile) }
 }
-
 if ($Test -or $Run) {
     Write-Log -Message "Running AI integration tests..." -Level "INFO" -LogFile $logFile
-    if (Test-PythonPackageInstalled -PackageName "ollama" -LogFile $logFile) {
-        $setupResults += @{Name = "AI Tests"; Success = (Invoke-AIIntegrationTests -LogFile $logFile) }
-    }
-    else {
-        Write-Log -Message "Skipping tests - dependencies not installed (use -Install flag)" -Level "WARN" -LogFile $logFile
-    }
+    $setupResults += @{Name = "AI Tests"; Success = (Invoke-AIIntegrationTests -LogFile $logFile) }
 }
-
 Write-Log -Message "=== SETUP SUMMARY ===" -Level "INFO" -LogFile $logFile
 $successfulSetups = ($setupResults | Where-Object { $_.Success }).Count
 $failedSetups = ($setupResults | Where-Object { -not $_.Success }).Count
@@ -758,9 +708,7 @@ foreach ($result in $setupResults) {
     Write-Log -Message "$($result.Name) - $($result.Success ? 'SUCCESS' : 'FAILED')" -Level ($result.Success ? "SUCCESS" : "ERROR") -LogFile $logFile
 }
 Write-Log -Message "Setup Results: $successfulSetups successful, $failedSetups failed" -Level "INFO" -LogFile $logFile
-
 Test-AIIntegrationSetup -LogFile $logFile | Out-Null
-
 if (-not ($Install -or $Test -or $Configure -or $Run)) {
     Write-Log -Message "=== NEXT STEPS ===" -Level "INFO" -LogFile $logFile
     Write-Log -Message "1. .\03-AIIntegration.ps1 -Configure   # Validate environment" -Level "INFO" -LogFile $logFile
@@ -768,15 +716,12 @@ if (-not ($Install -or $Test -or $Configure -or $Run)) {
     Write-Log -Message "3. .\04-OllamaSetup.ps1               # Setup Ollama service and models" -Level "INFO" -LogFile $logFile
     Write-Log -Message "Or run with full setup: .\03-AIIntegration.ps1 -Run" -Level "INFO" -LogFile $logFile
 }
-
 Write-Log -Message "Backend AI integration ready!" -Level "SUCCESS" -LogFile $logFile
 Write-Log -Message "Next: Run 04-OllamaSetup.ps1 to configure Ollama service and models" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Log Files Created:" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Full transcript: $transcriptFile" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Structured log: $logFile" -Level "INFO" -LogFile $logFile
 Write-Log -Message "JARVIS AI Integration Setup (v4.1) Complete!" -Level "SUCCESS" -LogFile $logFile
-
-
 # Colorized summary output
 $successCount = ($setupResults | Where-Object { $_.Success }).Count
 $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
@@ -786,5 +731,5 @@ foreach ($result in $setupResults) {
     $fg = if ($result.Success) { "Green" } else { "Red" }
     Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -ForegroundColor $fg
 }
-
+Write-Log -Message "$scriptPrefix v$scriptVersion complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript

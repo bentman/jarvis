@@ -1,16 +1,17 @@
 # J.A.R.V.I.S. AI Assistant
 
-A personal AI assistant inspired by Tony Stark's JARVIS, featuring local AI processing with hardware acceleration for NPU/GPU devices.
+A personal AI assistant inspired by Tony Stark's JARVIS, featuring local AI processing with modern voice capabilities and hardware acceleration for NPU/GPU devices.
 
 ## Overview
 
-JARVIS (Just A Rather Very Intelligent System) is a full-stack AI assistant that combines a FastAPI backend with a React frontend and local AI processing through Ollama. Built with a focus on performance, portability, and personality, it provides a witty, capable AI assistant that runs entirely on your local machine.
+JARVIS (Just A Rather Very Intelligent System) is a full-stack AI assistant that combines a FastAPI backend with a React frontend, local AI processing through Ollama, and modern voice integration. Built with a focus on performance, portability, and personality, it provides a witty, capable AI assistant with voice interaction that runs entirely on your local machine.
 
 ## Key Features
 
 - 🤖 **Local AI Processing**: Runs entirely on your machine using Ollama - no cloud dependencies
+- 🎤 **Modern Voice Stack**: Speech-to-text (faster-whisper), text-to-speech (coqui-tts), and wake word detection (openWakeWord)
 - 🚀 **Hardware Acceleration**: Automatic NPU/GPU detection and optimization (NVIDIA, AMD, Intel, Qualcomm)
-- 💬 **Personality System**: Configurable AI personality inspired by MCU's JARVIS
+- 💬 **Personality System**: Configurable AI personality inspired by MCU's JARVIS with voice responses
 - ⚡ **Cross-Platform**: Optimized for both x64 (Intel/AMD) and ARM64 (Snapdragon X)
 - 🔄 **Fallback Mode**: Continues working even when AI services are unavailable
 - 📊 **Performance Benchmarking**: Built-in benchmarking to measure AI response times
@@ -42,12 +43,17 @@ git clone https://github.com/bentman/jarvis.git
 pushd jarvis
 
 # Run setup scripts in sequence
-.\01-Prerequisites.ps1         # Install system dependencies
-.\02-FastApiBackend.ps1       # Setup backend with virtual environment
-.\03-IntegrateOllama.ps1      # Integrate AI services with personality
-.\04a-OllamaSetup.ps1         # Install Ollama and models
-.\04c-OllamaTuning.ps1        # Optimize for your hardware
-.\05-ReactFrontend.ps1        # Setup React frontend
+.\01-Prerequisites.ps1             # Install system dependencies
+.\02-FastApiBackend.ps1            # Setup backend with virtual environment
+.\03-IntegrateOllama.ps1           # Integrate AI services with personality
+.\04a-OllamaSetup.ps1              # Install Ollama and models
+.\04c-OllamaTuning.ps1             # Optimize for your hardware
+.\05-ReactFrontend.ps1             # Setup React frontend
+
+# Voice integration (optional but recommended)
+.\06a-VoiceSetup.ps1               # Setup voice service architecture
+.\06b-VoiceBackendIntegration.ps1  # Integrate voice with FastAPI
+.\06c-VoiceInstall.ps1             # Install voice dependencies
 ```
 
 ### Hardware Optimization
@@ -86,6 +92,9 @@ Quick health checks:
 
 # Check system health
 .\run_backend.ps1 -Health
+
+# Test voice integration (if installed)
+.\test_voice.ps1 -ShowConfig -TestAPI
 ```
 
 ### Accessing JARVIS
@@ -93,12 +102,34 @@ Quick health checks:
 1. Open your browser to **http://localhost:3000**
 2. JARVIS will greet you with personality
 3. Start chatting - responses are powered by local AI
+4. If voice is enabled, say "jarvis" or "hey jarvis" to activate voice mode
 
 ### API Access
 
 - **Interactive API Docs**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/api/health
 - **AI Status**: http://localhost:8000/api/ai/status
+- **Voice Status**: http://localhost:8000/api/voice/status (if voice enabled)
+
+### Voice Features
+
+With voice integration enabled, JARVIS supports:
+
+```powershell
+# Test microphone (speech-to-text)
+.\test_voice.ps1 -TestMic
+
+# Test text-to-speech
+.\test_voice.ps1 -TestTTS
+
+# Test all voice APIs
+.\test_voice.ps1 -TestAPI
+
+# Interactive voice mode
+.\test_voice.ps1 -Interactive
+```
+
+**Wake Words**: "jarvis" or "hey jarvis"
 
 ## Configuration
 
@@ -112,6 +143,18 @@ Edit/Create `.\jarvis_personality.json` to customize JARVIS's behavior:
     "base_personality": "You are Jarvis, inspired by Tony Stark's AI...",
     "tone": "formal British restraint with occasional dry wit",
     "formality": "always 'Sir' or 'Mr. [Name]', never casual"
+  },
+  "voice_settings": {
+    "voice_stack": "faster-whisper + coqui-tts + openWakeWord",
+    "wake_words": ["jarvis", "hey jarvis"],
+    "speech_rate": 1.0,
+    "voice_pitch": 0.5,
+    "responses": {
+      "wake_acknowledged": "Yes, how can I help you?",
+      "listening": "I'm listening...",
+      "processing": "Let me think about that...",
+      "error_no_speech": "I didn't hear anything. Please try again."
+    }
   }
 }
 ```
@@ -125,6 +168,12 @@ The `.env` file controls system settings:
 OLLAMA_MODEL=phi3:mini        # AI model to use
 API_HOST=0.0.0.0             # Backend host
 API_PORT=8000                # Backend port
+
+# Voice settings (if voice integration enabled)
+JARVIS_WAKE_WORDS=jarvis,hey jarvis
+FASTER_WHISPER_MODEL=base
+COQUI_TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
+VOICE_SAMPLE_RATE=16000
 ```
 
 ### Supported AI Models
@@ -160,6 +209,9 @@ Run your own benchmark:
 - `04b-OllamaDiag.ps1` - Hardware diagnostics
 - `04c-OllamaTuning.ps1` - Performance optimization
 - `05-ReactFrontend.ps1` - Frontend setup
+- `06a-VoiceSetup.ps1` - Voice service architecture
+- `06b-VoiceBackendIntegration.ps1` - Voice FastAPI integration
+- `06c-VoiceInstall.ps1` - Voice dependencies installation
 
 ### Quick Commands
 
@@ -172,16 +224,20 @@ Run your own benchmark:
 
 # Backend tests
 .\run_backend.ps1 -Test
+
+# Voice integration tests
+.\test_voice.ps1 -TestMic -TestTTS -TestAPI
 ```
 
 ### Extending JARVIS
 
 Future enhancements to explore:
-- 🎤 Voice input/output capabilities
 - 🔍 Web search integration
-- 📊 Data visualization
+- 📊 Data visualization  
 - 🔌 Plugin system for custom commands
 - 📱 Mobile app development
+- 🏠 Smart home integration
+- 📧 Email and calendar integration
 
 ## System Requirements
 

@@ -69,7 +69,6 @@ if ($Configure -or $Run) {
     Write-Log -Message "Configure phase complete (no config steps for diagnostics)." -Level SUCCESS -LogFile $logFile
     $setupResults += @{Name = "Configure Phase"; Success = $true }
 }
-
 try {
     # === Colorized summary output ===
     $successCount = ($setupResults | Where-Object { $_.Success }).Count
@@ -81,14 +80,8 @@ try {
         $msg = if ($result.Used) { " (Intent: use $($result.Used))" } else { "" }
         Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')$msg" -ForegroundColor $fg
     }
-
-    if ($used) {
-        Write-Host ">> Ollama/AI will prioritize: $used (per hardware detection)" -ForegroundColor Cyan
-    }
-    else {
-        Write-Host ">> No acceleration hardware found. CPU will be used (expect reduced performance)." -ForegroundColor Yellow
-    }
-
+    if ($used) { Write-Host ">> Ollama/AI will prioritize: $used (per hardware detection)" -ForegroundColor Cyan }
+    else { Write-Host ">> No acceleration hardware found. CPU will be used (expect reduced performance)." -ForegroundColor Yellow }
     Write-Log -Message "Diagnostics complete." -Level SUCCESS -LogFile $logFile
 }
 catch {
@@ -96,6 +89,5 @@ catch {
     Stop-Transcript
     exit 1
 }
-
 Write-Log -Message "$scriptPrefix v$scriptVersion complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript

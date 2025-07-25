@@ -1,6 +1,6 @@
 # 05-ReactFrontend.ps1 - React Frontend Build and Integration
 # Purpose: Create React frontend with inline-styled components for Jarvis AI
-# Last edit: 2025-07-15 - Reformatted according to project instructions
+# Last edit: 2025-07-24 - Replaced server startup with health validation in -Run mode
 
 param(
   [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.3.0"
+$scriptVersion = "4.4.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -36,7 +36,7 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
 $hardware = Get-AvailableHardware -LogFile $logFile
 
 function Test-Prerequisites {
-  param([string]$LogFile)
+  param( [Parameter(Mandatory = $true)] [string]$LogFile )
   if (-not (Test-Command -Command "node" -LogFile $LogFile)) {
     Write-Log -Message "Node.js not found. Run 01-Prerequisites.ps1 first." -Level ERROR -LogFile $LogFile
     return $false
@@ -49,7 +49,7 @@ function Test-Prerequisites {
 }
 
 function New-ReactApp {
-  param([string]$LogFile)
+  param( [Parameter(Mandatory = $true)] [string]$LogFile )
   if (Test-Path "frontend/package.json") {
     Write-Log -Message "React app already exists" -Level SUCCESS -LogFile $LogFile
     return $true
@@ -76,7 +76,7 @@ function New-ReactApp {
 }
 
 function Install-Dependencies {
-  param([string]$LogFile)
+  param( [Parameter(Mandatory = $true)] [string]$LogFile )
   Push-Location
   try {
     Set-Location frontend
@@ -100,13 +100,11 @@ function Install-Dependencies {
     Write-Log -Message "Failed to install dependencies: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
     return $false
   }
-  finally {
-    Pop-Location
-  }
+  finally { Pop-Location }
 }
 
 function New-FrontendFiles {
-  param([string]$LogFile)
+  param( [Parameter(Mandatory = $true)] [string]$LogFile )
   # Create directory structure
   $directories = @("frontend/src/components", "frontend/src/services", "frontend/src/types", "frontend/src/hooks", "frontend/src/styles")
   New-DirectoryStructure -Directories $directories -LogFile $LogFile
@@ -814,63 +812,18 @@ GENERATE_SOURCEMAP=true
 function New-RunScript {
   param([string]$LogFile)
   $runScript = @"
-# run_frontend.ps1 - Start the React frontend
-param(
-    [switch]`$Build,
-    [switch]`$Install,
-    [switch]`$Dev
-)
-if (`$Install) {
-    Write-Host "Installing frontend dependencies..." -ForegroundColor Cyan
-    if (-not (Test-Path "frontend")) {
-        Write-Host "Frontend directory not found" -ForegroundColor Red
-        return
-    }
-    
-    Push-Location frontend
-    try {
-        npm install
-        if (`$LASTEXITCODE -eq 0) { Write-Host "Dependencies installed successfully" -ForegroundColor Green } 
-        else { Write-Host "Dependency installation had issues" -ForegroundColor Yellow }
-    } 
-    finally { Pop-Location }
-    return
-}
-if (`$Build) {
-    Write-Host "Building frontend for production..." -ForegroundColor Cyan
-    if (-not (Test-Path "frontend")) {
-        Write-Host "Frontend directory not found" -ForegroundColor Red
-        return
-    }
-    Push-Location frontend
-    try {
-        npm run build
-        if (`$LASTEXITCODE -eq 0) { Write-Host "Build complete - files in frontend/build/" -ForegroundColor Green }
-        else { Write-Host "Build failed" -ForegroundColor Red }
-    } 
-    finally { Pop-Location }
-    return
-}
+# run_frontend.ps1 - Start the React Development Server
+# Simple development server startup - use npm commands directly for build/install
+
 Write-Host "Starting Jarvis AI Frontend..." -ForegroundColor Green
-Write-Host ""
 Write-Host "Frontend URL: http://localhost:3000" -ForegroundColor Cyan
-Write-Host "Backend URL: http://localhost:8000 (required)" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "To start backend: .\run_backend.ps1" -ForegroundColor Yellow
-Write-Host "Press Ctrl+C to stop the frontend" -ForegroundColor Red
-Write-Host ""
-# Check if backend is running
-try {
-    `$response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
-    Write-Host "Backend detected - full functionality available" -ForegroundColor Green
-} 
-catch { Write-Host "Backend not detected - start it for full functionality" -ForegroundColor Yellow }
-Write-Host ""
+Write-Host "Backend URL: http://localhost:8000 (ensure backend is running)" -ForegroundColor Cyan
+
 if (-not (Test-Path "frontend")) {
     Write-Host "Frontend directory not found - run .\05-ReactFrontend.ps1 first" -ForegroundColor Red
     return
 }
-Write-Host "Starting React development server..." -ForegroundColor Cyan
+
 Push-Location frontend
 try {
     npm start
@@ -890,7 +843,7 @@ try {
 }
 
 function Test-FrontendSetup {
-  param([string]$LogFile)
+  param( [Parameter(Mandatory = $true)] [string]$LogFile )
   Write-Log -Message "Validating frontend setup..." -Level INFO -LogFile $LogFile
   $checks = @(
     @{Name = "Node.js"; Path = "node"; IsCommand = $true },
@@ -911,7 +864,6 @@ function Test-FrontendSetup {
     else { $status = Test-Path $check.Path }
     $results += "$($status ? '✅' : '❌') $($check.Name)"
   }
-    
   # Check dependencies if package.json exists
   if (Test-Path "frontend/package.json") {
     Push-Location
@@ -931,7 +883,6 @@ function Test-FrontendSetup {
     catch { $results += "⚠️ Dependencies: Could not verify" }
     finally { Pop-Location }
   }
-    
   Write-Log -Message "=== FRONTEND VALIDATION RESULTS ===" -Level INFO -LogFile $LogFile
   foreach ($result in $results) {
     $level = if ($result -like "✅*") { "SUCCESS" } elseif ($result -like "⚠️*") { "WARN" } else { "ERROR" }
@@ -943,24 +894,50 @@ function Test-FrontendSetup {
   return $failureCount -eq 0
 }
 
-function Start-DevServer {
-  param([string]$LogFile)
-  Write-Log -Message "Starting React development server..." -Level INFO -LogFile $LogFile
-  Write-Log -Message "Frontend URL: http://localhost:3000" -Level INFO -LogFile $LogFile
-  Write-Log -Message "Backend URL: http://localhost:8000 (required)" -Level INFO -LogFile $LogFile
-  # Check backend status
+function Test-FrontendHealth {
+  param( [Parameter(Mandatory = $true)] [string]$LogFile )
+  Write-Log -Message "Validating frontend health..." -Level INFO -LogFile $LogFile
+  if (-not (Test-Path "frontend")) {
+    Write-Log -Message "Frontend directory not found - cannot validate" -Level ERROR -LogFile $LogFile
+    return $false
+  }
+  if (-not (Test-Path "frontend/package.json")) {
+    Write-Log -Message "Frontend package.json not found - cannot validate" -Level ERROR -LogFile $LogFile
+    return $false
+  }
+  $serverProcess = $null
+  Push-Location frontend
   try {
-    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
-    Write-Log -Message "Backend detected - full functionality available" -Level SUCCESS -LogFile $LogFile
+    Write-Log -Message "Starting temporary frontend server for validation..." -Level INFO -LogFile $LogFile
+    # Start development server in background
+    $serverProcess = Start-Process -PassThru -WindowStyle Hidden -FilePath "npm" -ArgumentList "start"
+    # Wait for server to start
+    Start-Sleep -Seconds 10
+    # Test if frontend is responding
+    $response = Invoke-WebRequest -Uri "http://localhost:3000" -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+    if ($response.StatusCode -eq 200) { Write-Log -Message "Frontend health check passed - server responding" -Level SUCCESS -LogFile $LogFile }
+    # Check if it can reach backend (optional)
+    try {
+      $backendHealth = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
+      Write-Log -Message "Backend connectivity confirmed - full functionality available" -Level SUCCESS -LogFile $LogFile
+    }
+    catch { Write-Log -Message "Backend not available - frontend validated but backend integration unavailable" -Level WARN -LogFile $LogFile }
+    Write-Log -Message "Frontend validation successful - use .\run_frontend.ps1 to start server" -Level SUCCESS -LogFile $LogFile
+    return $true
   }
   catch {
-    Write-Log -Message "Backend not detected - start with: .\run_backend.ps1" -Level WARN -LogFile $LogFile
+    Write-Log -Message "Frontend health validation failed: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+    return $false
   }
-  Write-Log -Message "Press Ctrl+C to stop the server" -Level WARN -LogFile $LogFile
-  Push-Location frontend
-  try { npm start }
-  catch { Write-Log -Message "Failed to start server: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile }
-  finally { Pop-Location }
+  finally {
+    if ($serverProcess -and -not $serverProcess.HasExited) {
+      Write-Log -Message "Stopping validation server..." -Level INFO -LogFile $LogFile
+      Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+      # Also kill any child npm processes
+      Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Parent.Id -eq $serverProcess.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Pop-Location
+  }
 }
 
 # Main execution
@@ -999,14 +976,11 @@ try {
       exit 1
     }
   }
-    
   if ($Configure -or $Run) {
     Write-Log -Message "Configuring frontend environment..." -Level INFO -LogFile $logFile
     Test-EnvironmentConfig -LogFile $logFile | Out-Null
   }
-    
   if ($Test -or $Run) { Test-FrontendSetup -LogFile $logFile | Out-Null }
-
   # Cleanup .git folder and .gitignore if all setup is complete
   $gitFolderPath = ".\frontend\.git\"
   if (Test-Path $gitFolderPath) {
@@ -1016,7 +990,6 @@ try {
     }
     catch { Write-Log -Message "Failed to remove .git folder: $_" -Level "WARN" -LogFile $logFile }
   }
-
   $gitIgnorePath = ".\frontend\.gitignore"
   if (Test-Path $gitIgnorePath) {
     try {
@@ -1025,12 +998,11 @@ try {
     }
     catch { Write-Log -Message "Failed to remove .gitignore file: $_" -Level "WARN" -LogFile $logFile }
   }
-
-  if ($Run) { Start-DevServer -LogFile $logFile }
+  if ($Run) { Test-FrontendHealth -LogFile $logFile }
   else {
     Write-Log -Message "=== NEXT STEPS ===" -Level INFO -LogFile $logFile
-    Write-Log -Message "1. .\05-ReactFrontend.ps1 -Run        # Start development server" -Level INFO -LogFile $logFile
-    Write-Log -Message "2. .\run_frontend.ps1                 # Quick start script" -Level INFO -LogFile $logFile
+    Write-Log -Message "1. .\05-ReactFrontend.ps1 -Run        # Validate frontend health" -Level INFO -LogFile $logFile
+    Write-Log -Message "2. .\run_frontend.ps1                 # Start development server" -Level INFO -LogFile $logFile
     Write-Log -Message "3. .\run_backend.ps1                  # Start backend (separate terminal)" -Level INFO -LogFile $logFile
     Write-Log -Message "" -Level INFO -LogFile $logFile
     Write-Log -Message "URLs:" -Level INFO -LogFile $logFile
@@ -1043,6 +1015,5 @@ catch {
   Stop-Transcript
   exit 1
 }
-
 Write-Log -Message "${scriptPrefix} v${scriptVersion} complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript

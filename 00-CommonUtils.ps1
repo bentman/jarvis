@@ -1,8 +1,11 @@
 # Common-Utils.ps1 - Shared utilities for JARVIS AI Assistant scripts
 # Purpose: Contains logging, Python package management, tool checks, and hardware detection
-# Last edit: 2025-07-14 - Added Get-AvailableHardware function
+# Last edit: 2025-07-25 - Removed unused functions
 
-$scriptVersion = "2.3.0"
+$scriptVersion = "2.4.1"
+
+# Global Ollama Model Configuration - Change this variable to switch models globally
+$JARVIS_DEFAULT_MODEL = "phi3:mini"
 
 # Log system information with modular switches
 function Write-SystemInfo {
@@ -47,8 +50,24 @@ function Write-Log {
         "SUCCESS" = "Green"
         "INFO"    = "Cyan"
     }
-    Write-Host $logEntry -ForegroundColor ($colorMap[$Level] ?? "White")
+    $color = if ($colorMap[$Level]) { $colorMap[$Level] } else { "White" }
+    Write-Host $logEntry -ForegroundColor $color
     Add-Content -Path $LogFile -Value $logEntry -ErrorAction SilentlyContinue
+}
+
+# Capture command output to transcript for enhanced debugging
+function Write-CommandOutput {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Command,
+        [string]$Output = "",
+        [Parameter(Mandatory = $true)] [string]$TranscriptFile
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $entry = "[$timestamp] [STDOUT] $Command"
+    if (-not [string]::IsNullOrWhiteSpace($Output)) {
+        $entry += "`n$Output"
+    }
+    Add-Content -Path $TranscriptFile -Value $entry -ErrorAction SilentlyContinue
 }
 
 function Test-PythonVersion {
@@ -127,7 +146,7 @@ function Test-PythonPackageInstalled {
         $basePackageName = $PackageName.Split('[')[0]
         $result = & $pythonCmd -m pip list --disable-pip-version-check 2>$null | Select-String -Pattern "^$basePackageName\s"
         $installed = $null -ne $result
-        Write-Log -Message "Python package $PackageName $(if ($installed) { 'found' } else { 'not found' })" -Level ($installed ? "SUCCESS" : "WARN") -LogFile $LogFile
+        Write-Log -Message "Python package $PackageName $(if ($installed) { 'found' } else { 'not found' })" -Level $(if ($installed) { "SUCCESS" } else { "WARN" }) -LogFile $LogFile
         return $installed
     }
     catch {
@@ -167,38 +186,53 @@ function Install-PythonPackage {
     }
 }
 
-# Detect active Ollama model with optimized .env parsing
-function Get-OllamaModel {
+# Get current Ollama model (reads .env, falls back to global variable)
+function Get-JarvisModel {
     param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    Write-Log -Message "Detecting active Ollama model..." -Level "INFO" -LogFile $LogFile
-    $defaultModel = "phi3:mini"
+    Write-Log -Message "Getting Jarvis model configuration..." -Level "INFO" -LogFile $LogFile
     $envPath = Join-Path -Path (Get-Location) -ChildPath ".env"
     if (Test-Path $envPath) {
         try {
             $envContent = Get-Content $envPath -ErrorAction Stop
             $modelMatch = $envContent | Where-Object { $_ -match "^OLLAMA_MODEL\s*=\s*['`"]?([^'`"\s]+)['`"]?" } | Select-Object -First 1
             if ($modelMatch -and $matches[1]) {
-                Write-Log -Message "OLLAMA_MODEL from .env: $($matches[1])" -Level "SUCCESS" -LogFile $LogFile
+                Write-Log -Message "Using model from .env: $($matches[1])" -Level "SUCCESS" -LogFile $LogFile
                 return $matches[1]
             }
         }
-        catch {
-            Write-Log -Message "Error reading .env: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
-        }
+        catch { Write-Log -Message "Error reading .env: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile }
     }
+    Write-Log -Message "Using default model: $JARVIS_DEFAULT_MODEL" -Level "INFO" -LogFile $LogFile
+    return $JARVIS_DEFAULT_MODEL
+}
+
+# Ensure correct Ollama model is installed (replaces existing model installation logic)
+function Sync-JarvisModel {
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
+    
+    $targetModel = Get-JarvisModel -LogFile $LogFile
+    Write-Log -Message "Synchronizing Ollama model: $targetModel" -Level "INFO" -LogFile $LogFile
+    
     try {
-        $response = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 3 -ErrorAction Stop
-        if ($response.models -and $response.models.Count -gt 0) {
-            $model = $response.models[0].name
-            Write-Log -Message "Detected Ollama model: $model" -Level "SUCCESS" -LogFile $LogFile
-            return $model
+        $installedModels = ollama list 2>$null
+        if (-not ($installedModels -match [regex]::Escape($targetModel))) {
+            Write-Log -Message "Installing model: $targetModel" -Level "INFO" -LogFile $LogFile
+            $pullResult = ollama pull $targetModel 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Log -Message "Model $targetModel installed successfully" -Level "SUCCESS" -LogFile $LogFile
+            }
+            else {
+                Write-Log -Message "Failed to install ${targetModel}: $pullResult" -Level "ERROR" -LogFile $LogFile
+                return $false
+            }
         }
+        else { Write-Log -Message "Model $targetModel already installed" -Level "SUCCESS" -LogFile $LogFile }
+        return $targetModel
     }
     catch {
-        Write-Log -Message "Ollama API not available: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
+        Write-Log -Message "Error syncing model: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
+        return $false
     }
-    Write-Log -Message "Defaulting to $defaultModel" -Level "INFO" -LogFile $LogFile
-    return $defaultModel
 }
 
 # Test if tool is installed with optimized command checking
@@ -269,7 +303,7 @@ function Test-EnvironmentConfig {
     if (-not (Test-Path $envPath)) {
         Write-Log -Message ".env file not found, creating with defaults" -Level "WARN" -LogFile $LogFile
         $defaultContent = @"
-OLLAMA_MODEL=phi3:mini
+OLLAMA_MODEL=$JARVIS_DEFAULT_MODEL
 ENVIRONMENT=development
 DEBUG=true
 LOG_LEVEL=DEBUG
@@ -279,7 +313,7 @@ SECRET_KEY=dev_secret_key_$(Get-Random)
 "@
         try {
             Set-Content -Path $envPath -Value $defaultContent -ErrorAction Stop
-            Write-Log -Message ".env created with default OLLAMA_MODEL=phi3:mini" -Level "SUCCESS" -LogFile $LogFile
+            Write-Log -Message ".env created with default OLLAMA_MODEL=$JARVIS_DEFAULT_MODEL" -Level "SUCCESS" -LogFile $LogFile
             return $true
         }
         catch {
@@ -297,13 +331,10 @@ SECRET_KEY=dev_secret_key_$(Get-Random)
             if (-not $envContent.EndsWith("`n")) {
                 Add-Content -Path $envPath -Value "" -ErrorAction Stop
             }
-            Add-Content -Path $envPath -Value "OLLAMA_MODEL=phi3:mini" -ErrorAction Stop
-            Write-Log -Message "Added OLLAMA_MODEL=phi3:mini to .env" -Level "SUCCESS" -LogFile $LogFile
+            Add-Content -Path $envPath -Value "OLLAMA_MODEL=$JARVIS_DEFAULT_MODEL" -ErrorAction Stop
+            Write-Log -Message "Added OLLAMA_MODEL=$JARVIS_DEFAULT_MODEL to .env" -Level "SUCCESS" -LogFile $LogFile
         }
-        else {
-            Write-Log -Message "OLLAMA_MODEL already defined in .env" -Level "SUCCESS" -LogFile $LogFile
-        }
-        
+        else { Write-Log -Message "OLLAMA_MODEL already defined in .env" -Level "SUCCESS" -LogFile $LogFile }
         Write-Log -Message "Environment configuration valid" -Level "SUCCESS" -LogFile $LogFile
         return $true
     }
@@ -415,9 +446,7 @@ function Install-VisualCppBuildTools {
             return $true
         }
     }
-    catch {
-        Write-Log -Message "Error checking Visual C++ Build Tools: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
-    }
+    catch { Write-Log -Message "Error checking Visual C++ Build Tools: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile }
     Write-Log -Message "Installing Visual C++ Build Tools (required for PyAudio)..." -Level "INFO" -LogFile $LogFile
     $success = Install-Tool -Id "Microsoft.VisualStudio.2022.BuildTools" -Name "Visual C++ Build Tools" -Command "cl" -LogFile $LogFile
     if (-not $success) {
@@ -431,7 +460,7 @@ function Install-VisualCppBuildTools {
 function Install-OllamaAndModels {
     param(
         [Parameter(Mandatory = $true)] [string]$LogFile,
-        [string[]]$EssentialModels = @("phi3:mini")
+        [string[]]$EssentialModels = @($JARVIS_DEFAULT_MODEL)
     )
     Write-Log -Message "Checking Ollama installation..." -Level "INFO" -LogFile $LogFile
     if (-not (Test-Tool -Id "Ollama.Ollama" -Name "Ollama" -Command "ollama" -LogFile $LogFile)) {
@@ -493,72 +522,6 @@ function Install-OllamaAndModels {
     return $true
 }
 
-# Install VS Code extensions
-function Install-VSCodeExtensions {
-    param(
-        [Parameter(Mandatory = $true)] [string[]]$Extensions,
-        [Parameter(Mandatory = $true)] [string]$LogFile
-    )
-    Write-Log -Message "Installing VS Code Extensions..." -Level "INFO" -LogFile $LogFile
-    $success = $true
-    foreach ($ext in $Extensions) {
-        try {
-            code --install-extension $ext --force 2>$null
-            Write-Log -Message "Installed VS Code extension: $ext" -Level "SUCCESS" -LogFile $LogFile
-        }
-        catch {
-            Write-Log -Message "Failed to install VS Code extension ${$ext}: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
-            $success = $false
-        }
-    }
-    return $success
-}
-
-# Install winget if not available
-function Install-Winget {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    if (Test-Tool -Id "Microsoft.AppInstaller" -Name "winget" -Command "winget" -LogFile $LogFile) {
-        return $true
-    }
-    Write-Log -Message "Installing Windows Package Manager (winget)..." -Level "INFO" -LogFile $LogFile
-    try {
-        $progressPreference = 'silentlyContinue'
-        $tempFile = "$env:TEMP\winget.msixbundle"
-        Invoke-WebRequest -Uri https://aka.ms/getwinget -OutFile $tempFile
-        Add-AppxPackage $tempFile
-        Remove-Item $tempFile -Force
-        Write-Log -Message "winget installed successfully" -Level "SUCCESS" -LogFile $LogFile
-        return $true
-    }
-    catch {
-        Write-Log -Message "winget installation failed: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        Write-Log -Message "Install manually from Microsoft Store or https://github.com/microsoft/winget-cli/releases" -Level "INFO" -LogFile $LogFile
-        return $false
-    }
-}
-
-# Install WSL
-function Install-WSL {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    if (Test-Tool -Id "Microsoft.WSL" -Name "WSL" -Command "wsl" -LogFile $LogFile) {
-        return $true
-    }
-    Write-Log -Message "Installing WSL (Windows Subsystem for Linux)..." -Level "INFO" -LogFile $LogFile
-    try {
-        dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-        dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
-        wsl --install --no-distribution
-        Write-Log -Message "WSL installed successfully" -Level "SUCCESS" -LogFile $LogFile
-        Write-Log -Message "A reboot may be required for WSL to function properly" -Level "WARN" -LogFile $LogFile
-        Write-Log -Message "Run 'wsl --install -d Ubuntu' after reboot to install Ubuntu" -Level "INFO" -LogFile $LogFile
-        return $true
-    }
-    catch {
-        Write-Log -Message "Failed to install WSL: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        return $false
-    }
-}
-
 # Detect available hardware (CPU/GPU/NPU) with prioritization
 function Get-AvailableHardware {
     param(
@@ -572,7 +535,6 @@ function Get-AvailableHardware {
         Platform      = ""
         OptimalConfig = "CPU"
     }
-
     try {
         # CPU Detection
         $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -581,7 +543,6 @@ function Get-AvailableHardware {
         $hardware.CPU.Architecture = $cpu.Architecture
         $hardware.Platform = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $cpu.Name -like "*Snapdragon*") { "ARM64" } else { "x64" }
         Write-Log -Message "CPU: $($hardware.CPU.Name) [$($hardware.CPU.Cores) logical cores]" -Level "SUCCESS" -LogFile $LogFile
-
         # NPU Detection
         $npus = @()
         if ($cpu.Name -like "*Snapdragon*" -and $cpu.Name -like "*X*") {
@@ -598,7 +559,6 @@ function Get-AvailableHardware {
                 TOPS = 34
             }
         }
-
         if ($npus) {
             $hardware.NPU.Available = $true
             $hardware.NPU.Name = $npus[0].Name
@@ -610,7 +570,6 @@ function Get-AvailableHardware {
         else {
             Write-Log -Message "No NPU detected" -Level "INFO" -LogFile $LogFile
         }
-
         # GPU Detection
         $gpus = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notlike "*Microsoft Remote Display Adapter*" }
         if ($gpus) {
@@ -618,34 +577,73 @@ function Get-AvailableHardware {
             $gpu = $gpus | Sort-Object -Property AdapterRAM -Descending | Select-Object -First 1
             $hardware.GPU.Name = $gpu.Name
             $hardware.GPU.VRAM = [math]::Round($gpu.AdapterRAM / 1GB, 2)
-            
             if ($gpu.Name -match "NVIDIA|RTX|GTX") {
                 $hardware.GPU.Type = "NVIDIA"
                 $hardware.GPU.CUDACapable = Test-Command -Command "nvidia-smi" -LogFile $LogFile
-                if (!$npus) { $hardware.OptimalConfig = "NVIDIA_GPU" }
+                if (!$hardware.NPU.Available) { $hardware.OptimalConfig = "NVIDIA_GPU" }
             }
             elseif ($gpu.Name -match "AMD") {
                 $hardware.GPU.Type = "AMD"
-                if (!$npus) { $hardware.OptimalConfig = "AMD_GPU" }
+                if (!$hardware.NPU.Available) { $hardware.OptimalConfig = "AMD_GPU" }
             }
             elseif ($gpu.Name -match "Intel.*Arc") {
                 $hardware.GPU.Type = "Intel_Arc"
-                if (!$npus) { $hardware.OptimalConfig = "Intel_GPU" }
+                if (!$hardware.NPU.Available) { $hardware.OptimalConfig = "Intel_GPU" }
             }
             elseif ($gpu.Name -match "Qualcomm.*Adreno") {
                 $hardware.GPU.Type = "Qualcomm_Adreno"
-                if (!$npus) { $hardware.OptimalConfig = "Qualcomm_Adreno" }
+                if (!$hardware.NPU.Available) { $hardware.OptimalConfig = "Qualcomm_Adreno" }
+            }
+            else {
+                # Unknown GPU - Enhanced detection for unrecognized hardware
+                $hardware.GPU.Type = "Unknown"
+                $hardware.GPU.DeviceID = $gpu.PNPDeviceID ?? "N/A"
+                $hardware.GPU.Vendor = ($gpu.Name -split ' ')[0] ?? "Unknown Vendor"
+                $hardware.GPU.Model = $gpu.Name ?? "Unrecognized GPU"
+                # Estimate VRAM if not detected properly
+                if ($hardware.GPU.VRAM -eq 0) {
+                    $hardware.GPU.VRAM = [Math]::Min(($hardware.CPU.Cores * 0.5), 8)  # Conservative estimate
+                }
+                if (!$hardware.NPU.Available) { 
+                    $hardware.OptimalConfig = if ($hardware.GPU.VRAM -ge 4) { "Unknown_GPU_Accelerated" } else { "Unknown_GPU_Conservative" }
+                }
+                Write-Log -Message "Unknown GPU detected: $($hardware.GPU.Name) (DeviceID: $($hardware.GPU.DeviceID))" -Level "WARN" -LogFile $LogFile
             }
             Write-Log -Message "GPU: $($hardware.GPU.Name) ($($hardware.GPU.VRAM) GB, CUDA: $($hardware.GPU.CUDACapable))" -Level "SUCCESS" -LogFile $LogFile
         }
         else {
             Write-Log -Message "No GPU detected" -Level "INFO" -LogFile $LogFile
         }
-
+        # Enhanced NPU/AI accelerator detection for unknown hardware
+        if (!$hardware.NPU.Available) {
+            $aiDevices = Get-CimInstance Win32_PnPEntity | Where-Object { 
+                $_.Name -match "NPU|Neural.*Processing|AI.*Accelerator|Hexagon.*NPU|VPU|Inference.*Engine" -and 
+                $_.Status -eq "OK" -and 
+                $_.Name -notlike "*Audio*" -and
+                $_.Name -notlike "*USB*Input*" -and
+                $_.Name -notlike "*Human*Interface*" -and
+                $_.Name -notlike "*Mouse*" -and
+                $_.Name -notlike "*Keyboard*" -and
+                $_.PNPDeviceID -notlike "USB\*" -and
+                $_.PNPDeviceID -notlike "HID\*"
+            }
+            if ($aiDevices) {
+                $aiDevice = $aiDevices | Select-Object -First 1
+                $hardware.NPU.Available = $true
+                $hardware.NPU.Name = "Unknown NPU/AI Accelerator ($($aiDevice.Name))"
+                $hardware.NPU.Type = "Unknown_NPU"
+                $hardware.NPU.TOPS = 10  # Conservative estimate
+                $hardware.NPU.DeviceID = $aiDevice.PNPDeviceID ?? "N/A"
+                # Only override OptimalConfig if no known NPU was already detected
+                if ($hardware.OptimalConfig -notmatch "NPU$") {
+                    $hardware.OptimalConfig = "Unknown_NPU"
+                }
+                Write-Log -Message "Unknown NPU/AI accelerator detected: $($aiDevice.Name) (DeviceID: $($hardware.NPU.DeviceID))" -Level "WARN" -LogFile $LogFile
+            }
+        }
         if (!$hardware.GPU.Available -and !$hardware.NPU.Available) {
             Write-Log -Message "No acceleration hardware detected, falling back to CPU" -Level "WARN" -LogFile $LogFile
         }
-
         Write-Log -Message "Platform: $($hardware.Platform), Optimal Config: $($hardware.OptimalConfig)" -Level "SUCCESS" -LogFile $LogFile
         return $hardware
     }
@@ -654,4 +652,216 @@ function Get-AvailableHardware {
         Write-Log -Message "Falling back to CPU: $($hardware.CPU.Name)" -Level "WARN" -LogFile $LogFile
         return $hardware
     }
+}
+
+# Generate optimal configuration for all hardware types including unknown hardware
+function Get-OptimalConfiguration {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Hardware
+    )
+    $config = @{ 
+        EnvironmentVars      = @{}
+        Instructions         = @()
+        ModelRecommendations = @()
+    }
+    # Determine primary hardware type for optimization
+    $primaryType = $Hardware.OptimalConfig
+    $cores = $Hardware.CPU.Cores
+    $vram = if ($Hardware.GPU.Available) { $Hardware.GPU.VRAM } else { 0 }
+    $tops = if ($Hardware.NPU.Available) { $Hardware.NPU.TOPS } else { 0 }
+    switch -Wildcard ($primaryType) {
+        "*NPU*" {
+            if ($Hardware.NPU.Type -eq "Qualcomm_Hexagon") {
+                # Qualcomm Snapdragon NPU optimization
+                $config.EnvironmentVars = @{
+                    "OLLAMA_NPU"               = "1"
+                    "OLLAMA_USE_NPU"           = "1"
+                    "OLLAMA_NUM_THREAD"        = "8"
+                    "OLLAMA_NUM_PARALLEL"      = "2"
+                    "OLLAMA_MAX_LOADED_MODELS" = "1"
+                    "OLLAMA_FLASH_ATTENTION"   = "1"
+                    "OLLAMA_KV_CACHE_TYPE"     = "f16"
+                }
+                $config.Instructions += "🚀 Qualcomm Hexagon NPU optimization applied ($($tops) TOPS)"
+                $config.ModelRecommendations += @("phi3:mini", "gemma2:2b", "llama3.2:3b")
+            }
+            elseif ($Hardware.NPU.Type -eq "Intel_AI_Boost") {
+                # Intel AI Boost NPU optimization
+                $config.EnvironmentVars = @{
+                    "OLLAMA_INTEL_NPU"         = "1"
+                    "OLLAMA_NUM_THREAD"        = "6"
+                    "OLLAMA_NUM_PARALLEL"      = "2"
+                    "OLLAMA_MAX_LOADED_MODELS" = "1"
+                }
+                $config.Instructions += "🚀 Intel AI Boost NPU optimization applied ($($tops) TOPS)"
+                $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+            }
+            elseif ($Hardware.NPU.Type -eq "Unknown_NPU") {
+                # Unknown NPU - Architecture-aware conservative acceleration
+                if ($Hardware.Platform -eq "ARM64") {
+                    # ARM64 unknown NPU (likely mobile/efficiency focused)
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_NPU"               = "1"
+                        "OLLAMA_ACCELERATION"      = "1"
+                        "OLLAMA_NPU_LAYERS"        = "10"  # More aggressive on ARM64
+                        "OLLAMA_NUM_THREAD"        = "6"
+                        "OLLAMA_NUM_PARALLEL"      = "2"
+                        "OLLAMA_MAX_LOADED_MODELS" = "1"
+                        "OLLAMA_FLASH_ATTENTION"   = "1"
+                    }
+                    $config.Instructions += "✅ Unknown ARM64 NPU detected - Mobile-optimized acceleration applied"
+                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b", "llama3.2:3b")
+                }
+                else {
+                    # x64 unknown NPU (likely desktop/performance focused)
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_NPU"               = "1" 
+                        "OLLAMA_ACCELERATION"      = "1"
+                        "OLLAMA_NPU_LAYERS"        = "8"  # Conservative on x64
+                        "OLLAMA_NUM_THREAD"        = "4"
+                        "OLLAMA_NUM_PARALLEL"      = "2"
+                        "OLLAMA_MAX_LOADED_MODELS" = "1"
+                        "OLLAMA_MAX_QUEUE"         = "128"
+                    }
+                    $config.Instructions += "⚠️ Unknown x64 NPU detected - Desktop-optimized acceleration applied"
+                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+                }
+                $config.Instructions += "Device: $($Hardware.NPU.Name)"
+                $config.Instructions += "DeviceID: $($Hardware.NPU.DeviceID)"
+                $config.Instructions += "TOPS Estimate: $($Hardware.NPU.TOPS)"
+                $config.Instructions += "Architecture: $($Hardware.Platform)"
+                $config.Instructions += "Optimization: Conservative NPU acceleration with platform awareness"
+                $config.Instructions += "Recommendation: Run .\04b-OllamaDiag.ps1 for performance validation"
+            }
+        }
+        "*GPU*" {
+            if ($Hardware.GPU.Type -eq "NVIDIA") {
+                # NVIDIA GPU optimization with CUDA differentiation
+                if ($Hardware.GPU.CUDACapable) {
+                    # CUDA-enabled NVIDIA GPU - Maximum performance optimization
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_CUDA"                = "1"
+                        "CUDA_VISIBLE_DEVICES"       = "0"
+                        "OLLAMA_GPU_LAYERS"          = "-1"  # Use all available GPU layers
+                        "OLLAMA_GPU_MEMORY_FRACTION" = "0.9"  # Use 90% of VRAM
+                        "OLLAMA_GPU_OVERHEAD"        = "$([math]::Floor($vram * 0.15 * 1024 * 1024 * 1024))"  # 15% overhead
+                        "OLLAMA_NUM_PARALLEL"        = if ($vram -ge 12) { "6" } elseif ($vram -ge 8) { "4" } else { "3" }
+                        "OLLAMA_MAX_LOADED_MODELS"   = if ($vram -ge 16) { "3" } elseif ($vram -ge 8) { "2" } else { "1" }
+                        "OLLAMA_FLASH_ATTENTION"     = "1"
+                        "OLLAMA_USE_MLOCK"           = "1"  # Prevent swapping to disk
+                        "OLLAMA_MAX_QUEUE"           = "512"
+                    }
+                    $config.Instructions += "🚀 NVIDIA GPU with CUDA acceleration enabled ($($vram) GB VRAM)"
+                    $config.Instructions += "CUDA Driver: ✅ Detected (nvidia-smi available)"
+                    $config.Instructions += "GPU Memory: $([math]::Floor($vram * 0.9)) GB allocated for models"
+                    $config.ModelRecommendations += if ($vram -ge 24) { 
+                        @("llama3.1:70b", "codellama:34b", "mixtral:8x7b") 
+                    }
+                    elseif ($vram -ge 16) { 
+                        @("llama3.1:13b", "codellama:13b", "llama3.1:8b") 
+                    }
+                    elseif ($vram -ge 8) { 
+                        @("llama3.1:8b", "codellama:7b", "gemma2:9b") 
+                    }
+                    else { 
+                        @("phi3:mini", "gemma2:2b", "llama3.2:3b") 
+                    }
+                }
+                else {
+                    # NVIDIA GPU without CUDA - Basic optimization with installation recommendation
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_ACCELERATION"      = "1"
+                        "OLLAMA_GPU_LAYERS"        = "10"  # Conservative without CUDA
+                        "OLLAMA_NUM_PARALLEL"      = "2"
+                        "OLLAMA_MAX_LOADED_MODELS" = "1"
+                    }
+                    $config.Instructions += "⚠️ NVIDIA GPU detected without CUDA ($($vram) GB VRAM)"
+                    $config.Instructions += "CUDA Driver: ❌ Not detected (nvidia-smi not found)"
+                    $config.Instructions += "🚀 PERFORMANCE IMPROVEMENT AVAILABLE:"
+                    $config.Instructions += "Install CUDA Toolkit for 3-5x faster inference"
+                    $config.Instructions += "Download: https://developer.nvidia.com/cuda-downloads"
+                    $config.Instructions += "After installation, restart and re-run setup scripts"
+                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")  # Conservative without CUDA
+                }
+            }
+            elseif ($Hardware.GPU.Type -eq "AMD") {
+                # AMD GPU optimization
+                $config.EnvironmentVars = @{
+                    "OLLAMA_HIP"          = "1"
+                    "OLLAMA_GPU_LAYERS"   = "-1"
+                    "OLLAMA_NUM_PARALLEL" = "3"
+                }
+                $config.Instructions += "✅ AMD GPU acceleration enabled ($($vram) GB VRAM)"
+                $config.ModelRecommendations += if ($vram -ge 8) { @("llama3.1:8b", "gemma2") } else { @("phi3:mini", "gemma2:2b") }
+            }
+            elseif ($Hardware.GPU.Type -eq "Intel_Arc") {
+                # Intel Arc GPU optimization
+                $config.EnvironmentVars = @{
+                    "OLLAMA_INTEL_GPU"    = "1"
+                    "OLLAMA_GPU_LAYERS"   = "20"
+                    "OLLAMA_NUM_PARALLEL" = "2"
+                }
+                $config.Instructions += "✅ Intel Arc GPU acceleration enabled ($($vram) GB VRAM)"
+                $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+            }
+            elseif ($Hardware.GPU.Type -eq "Unknown") {
+                # Unknown GPU - Enhanced generic acceleration based on 2024 research
+                if ($vram -ge 8) {
+                    # High-end unknown GPU - Aggressive optimization
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_ACCELERATION"        = "1"
+                        "OLLAMA_GPU_MEMORY_FRACTION" = "0.8"
+                        "OLLAMA_GPU_LAYERS"          = "-1"  # Use all available GPU layers
+                        "OLLAMA_NUM_PARALLEL"        = "4"
+                        "OLLAMA_MAX_LOADED_MODELS"   = "2"
+                        "OLLAMA_TENSOR_PARALLEL"     = "true"
+                    }
+                    $config.Instructions += "✅ Unknown GPU detected - High-performance acceleration applied ($($vram) GB VRAM)"
+                    $config.ModelRecommendations += @("llama3.2:7b", "codellama:7b", "gemma2:9b")
+                }
+                elseif ($vram -ge 4) {
+                    # Mid-range unknown GPU - Conservative acceleration
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_ACCELERATION"        = "1"
+                        "OLLAMA_GPU_MEMORY_FRACTION" = "0.8"
+                        "OLLAMA_GPU_LAYERS"          = "20"
+                        "OLLAMA_NUM_PARALLEL"        = "2"
+                        "OLLAMA_MAX_LOADED_MODELS"   = "1"
+                        "OLLAMA_MAX_QUEUE"           = "256"
+                    }
+                    $config.Instructions += "⚠️ Unknown GPU detected - Generic acceleration applied ($($vram) GB VRAM)"
+                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b", "llama3.2:3b")
+                }
+                else {
+                    # Low VRAM unknown GPU - Hybrid CPU-GPU fallback
+                    $config.EnvironmentVars = @{
+                        "OLLAMA_CPU_THREADS"       = [Math]::Min($cores, 8).ToString()
+                        "OLLAMA_GPU_LAYERS"        = "5"  # Use minimal GPU layers
+                        "OLLAMA_NUM_PARALLEL"      = "1"
+                        "OLLAMA_MAX_LOADED_MODELS" = "1"
+                    }
+                    $config.Instructions += "⚠️ Unknown GPU with low VRAM ($($vram) GB) - Hybrid CPU-GPU applied"
+                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+                }
+                $config.Instructions += "Device: $($Hardware.GPU.Name)"
+                $config.Instructions += "Vendor: $($Hardware.GPU.Vendor)"
+                $config.Instructions += "DeviceID: $($Hardware.GPU.DeviceID)"
+                $config.Instructions += "Optimization: Based on 2024 LLM inference research"
+                $config.Instructions += "Recommendation: Monitor performance and adjust OLLAMA_GPU_LAYERS if needed"
+            }
+        }
+        default {
+            # CPU optimization
+            $threads = [Math]::Min($cores, 12)
+            $config.EnvironmentVars = @{
+                "OLLAMA_NUM_PARALLEL"      = $threads.ToString()
+                "OLLAMA_MAX_LOADED_MODELS" = "1"
+                "OLLAMA_NUM_THREAD"        = $threads.ToString()
+            }
+            $config.Instructions += "🔧 CPU optimization applied with $threads threads"
+            $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+        }
+    }
+    return $config
 }

@@ -41,7 +41,6 @@ try {
         if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
             Write-Log -Message "winget not found. Attempting to install or enable winget..." -Level WARN -LogFile $logFile
             $wingetAttempt = $false
-
             try {
                 Start-Process "ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1" -WindowStyle Hidden
                 Write-Log -Message "Please install 'App Installer' (winget) from the Microsoft Store, then re-run this script." -Level WARN -LogFile $logFile
@@ -49,7 +48,6 @@ try {
                 if (Get-Command winget -ErrorAction SilentlyContinue) { $wingetAttempt = $true }
             }
             catch {}
-
             if (-not $wingetAttempt -and -not (Get-Command winget -ErrorAction SilentlyContinue)) {
                 Write-Log -Message "winget could not be installed automatically. Please install 'App Installer' (winget) from the Microsoft Store or https://github.com/microsoft/winget-cli/releases, then re-run this script." -Level ERROR -LogFile $logFile
                 Stop-Transcript
@@ -57,7 +55,6 @@ try {
             }
             Write-Log -Message "winget is now available." -Level SUCCESS -LogFile $logFile
         }
-
         # --- Install Git, Node.js, VSCode
         $tools = @(
             @{Id = "Git.Git"; Name = "Git"; Command = "git" },
@@ -67,23 +64,39 @@ try {
         foreach ($tool in $tools) {
             Install-Tool -Id $tool.Id -Name $tool.Name -Command $tool.Command -LogFile $logFile | Out-Null
         }
-
-        # --- Install Visual C++ Build Tools
+        # --- Install Visual C++ Build Tools (nVidia CUDA Support)
         Install-VisualCppBuildTools -LogFile $logFile | Out-Null
-
-        # --- Ensure Python 3.12+ is installed (install if missing)
+        # --- Ensure Python 3.12+ is installed (cross-architecture compatible)
         if (-not (Test-PythonVersion -Major 3 -Minor 12 -LogFile $logFile)) {
-            Write-Log -Message "Python 3.12+ not detected. Installing Python 3.12 via winget..." -Level WARN -LogFile $logFile
-            $pythonInstall = Install-Tool -Id "Python.Python.3.12" -Name "Python 3.12" -Command "python" -LogFile $logFile
+            Write-Log -Message "Python 3.12+ not detected. Installing Python..." -Level WARN -LogFile $logFile
+            # Cross-architecture Python installation
+            if ($hardware.Platform -eq "ARM64") {
+                Write-Log -Message "ARM64 detected - installing Microsoft Store Python for compatibility..." -Level INFO -LogFile $logFile
+                $pythonInstall = Install-Tool -Id "9NCVDN91XZQP" -Name "Python 3.12 (Microsoft Store)" -Command "python" -LogFile $logFile
+                if (-not $pythonInstall) {
+                    Write-Log -Message "Microsoft Store Python failed, trying standard Python.org package..." -Level WARN -LogFile $logFile
+                    $pythonInstall = Install-Tool -Id "Python.Python.3.12" -Name "Python 3.12" -Command "python" -LogFile $logFile
+                }
+            }
+            else {
+                Write-Log -Message "Installing Python 3.12 via winget..." -Level INFO -LogFile $logFile
+                $pythonInstall = Install-Tool -Id "Python.Python.3.12" -Name "Python 3.12" -Command "python" -LogFile $logFile
+            }
+            
             if (-not $pythonInstall) {
                 Write-Log -Message "Python 3.12 installation failed. Please install manually from https://www.python.org/downloads/" -Level ERROR -LogFile $logFile
                 Stop-Transcript
                 exit 1
             }
+            # Refresh PATH and verify installation
+            Write-Log -Message "Refreshing system PATH..." -Level INFO -LogFile $logFile
             $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
             Start-Sleep -Seconds 5
+            # Final verification - if still not found, recommend terminal restart
             if (-not (Test-PythonVersion -Major 3 -Minor 12 -LogFile $logFile)) {
-                Write-Log -Message "Python 3.12 install appears unsuccessful or not yet in PATH." -Level ERROR -LogFile $logFile
+                Write-Log -Message "Python 3.12+ was installed but not found in current PATH." -Level WARN -LogFile $logFile
+                Write-Log -Message "RECOMMENDATION: Close this terminal and open a new one, then re-run this script." -Level WARN -LogFile $logFile
+                Write-Log -Message "This is often required after Python installation to refresh PATH variables." -Level INFO -LogFile $logFile
                 Stop-Transcript
                 exit 1
             }
@@ -92,17 +105,12 @@ try {
         else {
             Write-Log -Message "Python 3.12+ detected in system PATH." -Level SUCCESS -LogFile $logFile
         }
-
         # --- Install Python pip, virtualenv, pipenv if needed
         Write-Log -Message "Setting up Python environment packages..." -Level INFO -LogFile $logFile
         $pythonPackages = @("pip", "virtualenv", "pipenv")
-        foreach ($pkg in $pythonPackages) {
-            Install-PythonPackage -PackageName $pkg -LogFile $logFile | Out-Null
-        }
-
-        # --- Install Ollama and download models
-        Install-OllamaAndModels -LogFile $logFile | Out-Null
-
+        foreach ($pkg in $pythonPackages) { Install-PythonPackage -PackageName $pkg -LogFile $logFile | Out-Null }
+        # --- Install Ollama and sync model
+        Sync-JarvisModel -LogFile $logFile | Out-Null
         Write-Log -Message "=== Installation Complete ===" -Level SUCCESS -LogFile $logFile
     }
 
@@ -116,7 +124,6 @@ catch {
     Stop-Transcript
     exit 1
 }
-
 # --- Finish up and log completion
 Write-Log -Message "${scriptPrefix} v${scriptVersion} complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript
