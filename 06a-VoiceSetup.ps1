@@ -1,6 +1,6 @@
 # 06a-VoiceSetup.ps1 - Voice Service Architecture Setup
 # Purpose: Create voice service module and jarvis_voice.json configuration system
-# Last edit: 2025-07-25 - Simplified NPU detection using direct ARM64 platform check
+# Last edit: 2025-08-06 - Manual inpection and alignments
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "2.7.0"
+$scriptVersion = "4.0.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -34,6 +34,8 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
     Run       = $Run
 }
 
+$hardware = Get-AvailableHardware -LogFile $logFile
+
 # Define script-level paths using critical backend pattern
 $backendDir = Join-Path $projectRoot "backend"
 $venvDir = Join-Path $backendDir ".venv"
@@ -47,22 +49,21 @@ function Test-Prerequisites {
     Write-Log -Message "Testing prerequisites..." -Level INFO -LogFile $LogFile
     # Check backend directory structure exists
     if (-not (Test-Path $backendDir)) {
-        Write-Log -Message "Backend directory not found at $backendDir" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Run 02-FastApiBackend.ps1 first to create backend structure" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "Backend directory not found. Run 02-FastApiBackend.ps1." -Level ERROR -LogFile $LogFile
         return $false
     }
     # Check backend services directory exists
     $servicesDir = Join-Path $backendDir "services"
     if (-not (Test-Path $servicesDir)) {
-        Write-Log -Message "Backend services directory not found" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Run 02-FastApiBackend.ps1 and 03-IntegrateOllama.ps1 first" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "Backend services directory not found." -Level ERROR -LogFile $LogFile
+        Write-Log -Message "Run 02-FastApiBackend.ps1 and 03-IntegrateOllama.ps1." -Level ERROR -LogFile $LogFile
         return $false
     }
     # Check AI service exists (voice depends on AI integration)
     $aiServicePath = Join-Path $backendDir "services\ai_service.py"
     if (-not (Test-Path $aiServicePath)) {
         Write-Log -Message "AI service not found - required dependency for voice integration" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Run 03-IntegrateOllama.ps1 first" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "Run 03-IntegrateOllama.ps1 first." -Level ERROR -LogFile $LogFile
         return $false
     }
     Write-Log -Message "All prerequisites verified" -Level SUCCESS -LogFile $LogFile
@@ -148,7 +149,7 @@ function New-VoiceConfiguration {
 }
 
 function New-VoiceServiceModule {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
+    param( [Parameter(Mandatory = $true)] [string]$LogFile, [Parameter(Mandatory = $true)] [hashtable]$Hardware )
     Write-Log -Message "Creating modern voice service module..." -Level INFO -LogFile $LogFile
     # Backup existing voice service if present (always regenerate with latest logic)
     if (Test-Path $voiceServicePath) {
@@ -157,7 +158,10 @@ function New-VoiceServiceModule {
         Write-Log -Message "Backed up existing voice service to: $backupPath" -Level INFO -LogFile $LogFile
         Write-Log -Message "Regenerating voice service with latest hardware detection" -Level INFO -LogFile $LogFile
     }
-    $voiceServiceCode = @'
+    # Get hardware configuration for template expansion
+    $optimalConfig = $Hardware.OptimalConfig
+    
+    $voiceServiceCode = @"
 import os
 import json
 import logging
@@ -287,20 +291,11 @@ class ModernVoiceService:
     
     def _detect_device(self) -> str:
         """Detect optimal device for voice processing using JARVIS hardware detection"""
-        import os
-        import subprocess
-        import json
+        optimal_config = "$optimalConfig"
+        if optimal_config == "Qualcomm_NPU":
+            logger.info("Using NPU on ARM64 Snapdragon X system")
+            return "npu_qualcomm"
         
-        try:
-            # Simple hardware detection
-            import platform
-            if platform.machine().lower() == 'arm64':
-                logger.info("Using NPU on ARM64 Snapdragon X system")
-                return "npu_qualcomm"
-        except Exception as e:
-            logger.warning(f"Platform detection failed: {e}, falling back to PyTorch detection")
-        
-        # Fallback to PyTorch detection for compatibility
         try:
             import torch
             if torch.cuda.is_available():
@@ -358,7 +353,67 @@ class ModernVoiceService:
         except ImportError:
             return False
     
-    async def speak(self, text: str) -> Dict[str, Any]:
+    def _match_input_device(self, device_label: Optional[str]) -> Optional[int]:
+        """Match device label to sounddevice input device index"""
+        if device_label is None or device_label == 'default':
+            return None  # Use sounddevice default
+        
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+            
+            # Try exact match first
+            for i, device in enumerate(devices):
+                if device['name'] == device_label and device['max_input_channels'] > 0:
+                    logger.info(f"Exact match found: device {i} ({device['name']})")
+                    return i
+            
+            # Try partial match (case-insensitive)
+            device_label_lower = device_label.lower()
+            for i, device in enumerate(devices):
+                if (device_label_lower in device['name'].lower() and 
+                    device['max_input_channels'] > 0):
+                    logger.info(f"Partial match found: device {i} ({device['name']})")
+                    return i
+            
+            logger.warning(f"No input device found matching '{device_label}', using default")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Device matching error: {e}")
+            return None
+    
+    def _match_output_device(self, device_label: Optional[str]) -> Optional[int]:
+        """Match device label to sounddevice output device index"""
+        if device_label is None or device_label == 'default':
+            return None  # Use sounddevice default
+        
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+            
+            # Try exact match first
+            for i, device in enumerate(devices):
+                if device['name'] == device_label and device['max_output_channels'] > 0:
+                    logger.info(f"Exact match found: device {i} ({device['name']})")
+                    return i
+            
+            # Try partial match (case-insensitive)
+            device_label_lower = device_label.lower()
+            for i, device in enumerate(devices):
+                if (device_label_lower in device['name'].lower() and 
+                    device['max_output_channels'] > 0):
+                    logger.info(f"Partial match found: device {i} ({device['name']})")
+                    return i
+            
+            logger.warning(f"No output device found matching '{device_label}', using default")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Device matching error: {e}")
+            return None
+    
+    async def speak(self, text: str, device_id: Optional[str] = None) -> Dict[str, Any]:
         """Convert text to speech using coqui-tts"""
         try:
             if not self._check_tts_available():
@@ -368,12 +423,44 @@ class ModernVoiceService:
                     "data": {"text": text}
                 }
             
-            # TTS implementation will be loaded when dependencies are installed
-            logger.info(f"TTS request: {text[:50]}...")
+            from TTS.api import TTS
+            import tempfile
+            import os
+            import sounddevice as sd
+            import soundfile as sf
+            
+            # Initialize TTS model
+            model_name = self.voice_config.get("models", {}).get("tts_model", "tts_models/en/ljspeech/tacotron2-DDC")
+            tts = TTS(model_name=model_name, gpu=True if self.device == "cuda" else False)
+            
+            # Generate speech to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                temp_path = tmp_file.name
+            
+            # Configure voice settings
+            speed = self.voice_config.get("audio_settings", {}).get("speech_rate", 1.0)
+            
+            # Generate audio
+            tts.tts_to_file(text=text, file_path=temp_path)
+            
+            # Play audio with device selection
+            data, samplerate = sf.read(temp_path)
+            
+            # Match device label to sounddevice index
+            device = self._match_output_device(device_id)
+            logger.info(f"Using output device: {device} (from device_id: {device_id})")
+            
+            sd.play(data, samplerate * speed, device=device)
+            sd.wait()  # Wait for playback to complete
+            
+            # Cleanup
+            os.unlink(temp_path)
+            
+            logger.info(f"TTS completed: {text[:50]}...")
             return {
                 "success": True,
-                "message": "TTS functionality ready (requires dependencies)",
-                "data": {"text": text, "voice_config": self.voice_config["audio_settings"]}
+                "message": "Text-to-speech completed successfully",
+                "data": {"text": text, "model": model_name, "device": self.device}
             }
             
         except Exception as e:
@@ -384,7 +471,7 @@ class ModernVoiceService:
                 "data": {"text": text}
             }
     
-    async def listen(self, timeout: int = 10) -> Dict[str, Any]:
+    async def listen(self, timeout: int = 10, device_id: Optional[str] = None) -> Dict[str, Any]:
         """Convert speech to text using faster-whisper"""
         try:
             if not self._check_whisper_available():
@@ -394,12 +481,56 @@ class ModernVoiceService:
                     "data": {}
                 }
             
-            # STT implementation will be loaded when dependencies are installed
-            logger.info("STT listening request")
+            from faster_whisper import WhisperModel
+            import sounddevice as sd
+            import soundfile as sf
+            import tempfile
+            import numpy as np
+            import os
+            
+            # Initialize Whisper model
+            model_size = self.voice_config.get("models", {}).get("whisper_model", "base")
+            device = "cuda" if self.device == "cuda" else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            
+            # Record audio
+            sample_rate = self.voice_config.get("audio_settings", {}).get("sample_rate", 16000)
+            
+            logger.info(f"Recording for {timeout} seconds...")
+            
+            # Match device label to sounddevice index
+            device = self._match_input_device(device_id)
+            logger.info(f"Using input device: {device} (from device_id: {device_id})")
+            
+            audio_data = sd.rec(int(timeout * sample_rate), samplerate=sample_rate, channels=1, dtype=np.float32, device=device)
+            sd.wait()  # Wait for recording to complete
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                temp_path = tmp_file.name
+            
+            sf.write(temp_path, audio_data, sample_rate)
+            
+            # Transcribe
+            segments, info = model.transcribe(temp_path, language="en")
+            transcript = " ".join([segment.text for segment in segments]).strip()
+            
+            # Cleanup
+            os.unlink(temp_path)
+            
+            logger.info(f"STT completed: {transcript}")
             return {
                 "success": True,
-                "message": "STT functionality ready (requires dependencies)",
-                "data": {"timeout": timeout, "voice_config": self.voice_config["audio_settings"]}
+                "message": "Speech-to-text completed successfully",
+                "data": {
+                    "transcript": transcript,
+                    "language": info.language,
+                    "duration": timeout,
+                    "model": model_size,
+                    "device": device
+                }
             }
             
         except Exception as e:
@@ -420,17 +551,71 @@ class ModernVoiceService:
                     "data": {}
                 }
             
-            # Wake word implementation will be loaded when dependencies are installed
-            logger.info("Wake word detection request")
-            return {
-                "success": True,
-                "message": "Wake word detection ready (requires dependencies)",
-                "data": {
-                    "wake_words": self.voice_config.get("wake_words", []),
-                    "timeout": timeout,
-                    "sensitivity": self.voice_config.get("advanced", {}).get("wake_word_sensitivity", 0.5)
+            import openwakeword
+            from openwakeword.model import Model
+            import sounddevice as sd
+            import numpy as np
+            import time
+            
+            # Initialize wake word model
+            model = Model(wakeword_models=["hey_jarvis_v0.1"], inference_framework="tflite")
+            sensitivity = self.voice_config.get("advanced", {}).get("wake_word_sensitivity", 0.5)
+            
+            # Audio configuration
+            sample_rate = 16000
+            chunk_duration = 0.1  # 100ms chunks
+            chunk_size = int(sample_rate * chunk_duration)
+            
+            logger.info(f"Listening for wake word for {timeout} seconds...")
+            
+            start_time = time.time()
+            detected_word = None
+            
+            # Real-time audio stream processing
+            def audio_callback(indata, frames, time, status):
+                nonlocal detected_word
+                if status:
+                    logger.warning(f"Audio callback status: {status}")
+                
+                # Convert to the format expected by openWakeWord
+                audio_chunk = (indata[:, 0] * 32767).astype(np.int16)
+                
+                # Get prediction
+                prediction = model.predict(audio_chunk)
+                
+                # Check for wake word detection
+                for word, score in prediction.items():
+                    if score >= sensitivity:
+                        detected_word = word
+                        logger.info(f"Wake word detected: {word} (score: {score:.3f})")
+                        return
+            
+            # Start audio stream
+            with sd.InputStream(callback=audio_callback, channels=1, samplerate=sample_rate, 
+                              blocksize=chunk_size, dtype=np.float32):
+                
+                while time.time() - start_time < timeout and detected_word is None:
+                    sd.sleep(100)  # Sleep 100ms
+            
+            if detected_word:
+                return {
+                    "success": True,
+                    "message": f"Wake word '{detected_word}' detected successfully",
+                    "data": {
+                        "wake_word": detected_word,
+                        "detection_time": time.time() - start_time,
+                        "sensitivity": sensitivity
+                    }
                 }
-            }
+            else:
+                return {
+                    "success": False,
+                    "message": f"No wake word detected within {timeout} seconds",
+                    "data": {
+                        "timeout": timeout,
+                        "sensitivity": sensitivity
+                    }
+                }
             
         except Exception as e:
             logger.error(f"Wake word detection error: {e}")
@@ -505,7 +690,7 @@ class ModernVoiceService:
 
 # Global voice service instance
 voice_service = ModernVoiceService()
-'@
+"@
     
     try {
         Set-Content -Path $voiceServicePath -Value $voiceServiceCode -Encoding UTF8
@@ -532,8 +717,9 @@ function New-VoiceServiceValidation {
             $validationResults += "✅ Modern voice stack: faster-whisper + coqui-tts + openWakeWord"
         }
         else { $validationResults += "❌ Voice stack: Not modern stack" }
-        
-        if ($serviceContent -match "jarvis_voice\.json") { $validationResults += "✅ Configuration system: jarvis_voice.json integration" }
+        if ($serviceContent -match "jarvis_voice\.json") { 
+            $validationResults += "✅ Configuration system: jarvis_voice.json integration" 
+        }
         else { $validationResults += "❌ Configuration system: Missing jarvis_voice.json integration" }
     }
     else { $validationResults += "❌ Voice service module: Missing" }
@@ -576,26 +762,25 @@ try {
     # Voice service architecture setup - always run
     Write-Log -Message "Setting up voice service architecture..." -Level INFO -LogFile $logFile
     $setupResults += @{Name = "Voice Configuration"; Success = (New-VoiceConfiguration -LogFile $logFile) }
-    $setupResults += @{Name = "Voice Service Module"; Success = (New-VoiceServiceModule -LogFile $logFile) }
+    $setupResults += @{Name = "Voice Service Module"; Success = (New-VoiceServiceModule -LogFile $logFile -Hardware $hardware) }
     if ($Test -or $Run) {
         Write-Log -Message "Validating voice service architecture..." -Level INFO -LogFile $logFile
         $setupResults += @{Name = "Architecture Validation"; Success = (New-VoiceServiceValidation -LogFile $logFile) }
     }
-    # Summary
-    Write-Log -Message "=== SETUP SUMMARY ===" -Level INFO -LogFile $logFile
-    $successCount = 0
-    $failCount = 0
-    foreach ($result in $setupResults) {
-        if ($result.Success) {
-            Write-Log -Message "$($result.Name) - SUCCESS" -Level SUCCESS -LogFile $logFile
-            $successCount++
-        }
-        else {
-            Write-Log -Message "$($result.Name) - FAILED" -Level ERROR -LogFile $logFile
-            $failCount++
-        }
+
+    Write-Log -Message "=== FINAL RESULTS ===" -Level INFO -LogFile $logFile
+    $successCount = ($setupResults | Where-Object { $_.Success }).Count
+    $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
+    Write-Log -Message "SUCCESS: $successCount components" -Level SUCCESS -LogFile $logFile
+    if ($failCount -gt 0) {
+        Write-Log -Message "FAILED: $failCount components" -Level ERROR -LogFile $logFile
     }
-    Write-Log -Message "Setup Results: $successCount successful, $failCount failed" -Level INFO -LogFile $logFile
+    foreach ($result in $setupResults) {
+        $status = if ($result.Success) { 'SUCCESS' } else { 'FAILED' }
+        $level = if ($result.Success) { "SUCCESS" } else { "ERROR" }
+        Write-Log -Message "$($result.Name): $status" -Level $level -LogFile $logFile
+    }
+
     if ($failCount -gt 0) {
         Write-Log -Message "Voice service architecture setup had failures" -Level ERROR -LogFile $logFile
         Stop-Transcript
@@ -607,10 +792,10 @@ try {
     Write-Log -Message "Configuration: jarvis_voice.json (customizable)" -Level INFO -LogFile $logFile
     Write-Log -Message "Voice Stack: faster-whisper + coqui-tts + openWakeWord" -Level INFO -LogFile $logFile
     Write-Log -Message "=== NEXT STEPS ===" -Level INFO -LogFile $logFile
-    Write-Log -Message "1. Run .\06b-VoiceBackendIntegration.ps1 to integrate with FastAPI backend" -Level INFO -LogFile $logFile
-    Write-Log -Message "2. Run .\06c-VoiceInstall.ps1 -Install -Test to install voice dependencies" -Level INFO -LogFile $logFile
-    Write-Log -Message "3. Customize jarvis_voice.json if needed (optional)" -Level INFO -LogFile $logFile
-    Write-Log -Message "4. Start backend: .\run_backend.ps1" -Level INFO -LogFile $logFile
+    Write-Log -Message "1. To integrate with FastAPI backend: .\06b-VoiceBackendIntegration.ps1" -Level INFO -LogFile $logFile
+    Write-Log -Message "2. To install voice dependencies: .\06c-VoiceInstall.ps1 -Install -Test" -Level INFO -LogFile $logFile
+    Write-Log -Message "3. To customize voice settings: Edit jarvis_voice.json (optional)" -Level INFO -LogFile $logFile
+    Write-Log -Message "4. To start the backend: .\run_backend.ps1" -Level INFO -LogFile $logFile
 }
 catch {
     Write-Log -Message "Error: $_" -Level ERROR -LogFile $logFile

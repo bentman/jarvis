@@ -1,6 +1,6 @@
 # 04c-OllamaTuning.ps1 - Ollama Hardware Tuning and Configuration
 # Purpose: Detects, prioritizes, and configures optimal hardware (NPU/GPU/CPU) for Ollama LLM inference.
-# Last edit: 2025-07-24 - Updated model validation to use centralized configuration
+# Last edit: 2025-08-06 - Manual inpection and alignments
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.3.0"
+$scriptVersion = "5.0.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -182,7 +182,6 @@ function Optimize-OllamaModels {
         [Parameter(Mandatory = $true)] [string]$LogFile,
         [Parameter(Mandatory = $true)] [hashtable]$Hardware
     )
-    
     Write-Log -Message "Optimizing Ollama models..." -Level "INFO" -LogFile $LogFile
     if (-not (Test-OllamaRunning -LogFile $LogFile)) {
         Write-Log -Message "Ollama not running - cannot optimize models" -Level "ERROR" -LogFile $LogFile
@@ -305,49 +304,6 @@ function Test-OllamaPerformance {
     }
 }
 
-# Stop Ollama
-function Stop-OllamaService {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    Write-Log -Message "Stopping Ollama processes..." -Level "INFO" -LogFile $LogFile
-    try {
-        $processes = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
-        if ($processes) {
-            $processes | ForEach-Object { $_.Kill(); $_.WaitForExit(5000) }
-            Write-Log -Message "Ollama processes stopped" -Level "SUCCESS" -LogFile $LogFile
-        }
-        return $true
-    }
-    catch {
-        Write-Log -Message "Error stopping Ollama: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        return $false
-    }
-}
-
-# Start Ollama
-function Start-OllamaService {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    Write-Log -Message "Starting Ollama..." -Level "INFO" -LogFile $LogFile
-    try {
-        $ollamaPath = Get-Command "ollama" -ErrorAction Stop | Select-Object -ExpandProperty Source
-        $process = Start-Process -FilePath $ollamaPath -ArgumentList "serve" -WindowStyle Hidden -PassThru -ErrorAction Stop
-        $attempts = 0
-        while (-not (Test-OllamaRunning -LogFile $LogFile) -and $attempts -lt 15) {
-            Start-Sleep -Seconds 2
-            $attempts++
-        }
-        if (Test-OllamaRunning -LogFile $LogFile) {
-            Write-Log -Message "Ollama started (PID: $($process.Id))" -Level "SUCCESS" -LogFile $LogFile
-            return $true
-        }
-        Write-Log -Message "Ollama failed to start" -Level "ERROR" -LogFile $LogFile
-        return $false
-    }
-    catch {
-        Write-Log -Message "Failed to start Ollama: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        return $false
-    }
-}
-
 # Validate Ollama setup
 function Test-OllamaSetup {
     param(
@@ -363,9 +319,10 @@ function Test-OllamaSetup {
     try {
         $response = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -ErrorAction Stop
         $defaultModel = Get-JarvisModel -LogFile $LogFile
-        $results += ($response.models.name -contains $defaultModel) ? 
-        "✅ $defaultModel model available" : 
-        "❌ $defaultModel model not installed"
+        if ($response.models.name -contains $defaultModel) {
+            $results += "✅ $defaultModel model available"
+        }
+        else { $results += "❌ $defaultModel model not installed" }
     }
     catch { $results += "❌ Model check failed: $($_.Exception.Message)" }
     $deviceType = $Hardware.OptimalConfig
@@ -426,13 +383,18 @@ try {
         Write-Log -Message "=== MODEL OPTIMIZATION ===" -Level "INFO" -LogFile $logFile
         $results += @{Name = "Model Optimization"; Success = (Optimize-OllamaModels -Hardware $hardware -LogFile $logFile) }
     }
-    Write-Log -Message "=== SUMMARY ===" -Level "INFO" -LogFile $logFile
+    # === Standardized completion summary ===
+    Write-Log -Message "=== FINAL RESULTS ===" -Level INFO -LogFile $logFile
     $successCount = ($results | Where-Object { $_.Success }).Count
+    $failCount = ($results | Where-Object { -not $_.Success }).Count
+    Write-Log -Message "SUCCESS: $successCount components" -Level SUCCESS -LogFile $logFile
+    if ($failCount -gt 0) { Write-Log -Message "FAILED: $failCount components" -Level ERROR -LogFile $logFile }
     foreach ($result in $results) {
-        Write-Log -Message "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -Level ($result.Success ? "SUCCESS" : "ERROR") -LogFile $logFile
+        $status = if ($result.Success) { 'SUCCESS' } else { 'FAILED' }
+        $level = if ($result.Success) { "SUCCESS" } else { "ERROR" }
+        Write-Log -Message "$($result.Name): $status" -Level $level -LogFile $logFile
     }
-    Write-Log -Message "Tuning: $successCount/$($results.Count) tasks completed successfully" -Level ($successCount -eq $results.Count ? "SUCCESS" : "ERROR") -LogFile $logFile
-    if ($successCount -ne $results.Count) {
+    if ($failCount -gt 0) {
         Write-Log -Message "Review logs: $logFile" -Level "INFO" -LogFile $logFile
         Stop-Transcript
         exit 1
@@ -440,21 +402,12 @@ try {
     Write-Log -Message "Log Files: $transcriptFile, $logFile" -Level "INFO" -LogFile $logFile
     if ($hardware.Platform -eq "ARM64") { Write-Log -Message "ARM64 optimizations active for NPU" -Level "SUCCESS" -LogFile $logFile }
     Write-Log -Message "JARVIS Ollama Tuning (v$scriptVersion) Complete!" -Level "SUCCESS" -LogFile $logFile
-    # === Colorized summary output ===
-    $successCount = ($results | Where-Object { $_.Success }).Count
-    $failCount = ($results | Where-Object { -not $_.Success }).Count
-    Write-Host "SUCCESS: $successCount" -ForegroundColor Green
-    Write-Host "FAILED: $failCount" -ForegroundColor Red
-    foreach ($result in $results) {
-        $fg = if ($result.Success) { "Green" } else { "Red" }
-        Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -ForegroundColor $fg
-    }
-    Write-Log -Message "Tuning complete." -Level SUCCESS -LogFile $logFile
 }
 catch {
     Write-Log -Message "Error: $_" -Level ERROR -LogFile $logFile
     Stop-Transcript
     exit 1
 }
+
 Write-Log -Message "$scriptPrefix v$scriptVersion complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript

@@ -1,6 +1,6 @@
 # 04b-OllamaDiag.ps1 - Ollama Hardware Diagnostics and Capability Detection
 # Purpose: Identify NPU/GPU/CPU for Ollama/AI and report best available path, with graceful fallback
-# Last edit: 2025-07-14 - Integrated Get-AvailableHardware for simplified hardware detection
+# Last edit: 2025-08-06 - Manual inpection and alignments
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.3.0"
+$scriptVersion = "5.0.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -70,18 +70,27 @@ if ($Configure -or $Run) {
     $setupResults += @{Name = "Configure Phase"; Success = $true }
 }
 try {
-    # === Colorized summary output ===
+    # === Standardized completion summary ===
+    Write-Log -Message "=== FINAL RESULTS ===" -Level INFO -LogFile $logFile
     $successCount = ($setupResults | Where-Object { $_.Success }).Count
     $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
-    Write-Host "SUCCESS: $successCount" -ForegroundColor Green
-    Write-Host "FAILED: $failCount" -ForegroundColor Red
-    foreach ($result in $setupResults) {
-        $fg = if ($result.Success) { "Green" } else { "Red" }
-        $msg = if ($result.Used) { " (Intent: use $($result.Used))" } else { "" }
-        Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')$msg" -ForegroundColor $fg
+    Write-Log -Message "SUCCESS: $successCount components" -Level SUCCESS -LogFile $logFile
+    if ($failCount -gt 0) {
+        Write-Log -Message "FAILED: $failCount components" -Level ERROR -LogFile $logFile
     }
-    if ($used) { Write-Host ">> Ollama/AI will prioritize: $used (per hardware detection)" -ForegroundColor Cyan }
-    else { Write-Host ">> No acceleration hardware found. CPU will be used (expect reduced performance)." -ForegroundColor Yellow }
+    foreach ($result in $setupResults) {
+        $msg = if ($result.Used) { " (Intent: use $($result.Used))" } else { "" }
+        $status = if ($result.Success) { 'SUCCESS' } else { 'FAILED' }
+        $level = if ($result.Success) { "SUCCESS" } else { "ERROR" }
+        Write-Log -Message "$($result.Name): $status$msg" -Level $level -LogFile $logFile
+    }
+    # Hardware acceleration summary
+    if ($used) { 
+        Write-Log -Message "Ollama/AI will prioritize: $used (per hardware detection)" -Level INFO -LogFile $logFile 
+    }
+    else { 
+        Write-Log -Message "No acceleration hardware found. CPU will be used (expect reduced performance)." -Level WARN -LogFile $logFile 
+    }
     Write-Log -Message "Diagnostics complete." -Level SUCCESS -LogFile $logFile
 }
 catch {

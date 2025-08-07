@@ -2,10 +2,15 @@
 # Purpose: Contains logging, Python package management, tool checks, and hardware detection
 # Last edit: 2025-07-25 - Removed unused functions
 
-$scriptVersion = "2.4.1"
+$scriptVersion = "6.0.0"
+$JARVIS_APP_VERSION = "2.3.0" # Centralized application version
 
 # Global Ollama Model Configuration - Change this variable to switch models globally
-$JARVIS_DEFAULT_MODEL = "phi3:mini"
+$JARVIS_DEFAULT_MODEL = "phi3:mini"         # JARVIS System Development
+$JARVIS_CHAT_MODEL    = "gemma2:2b"         # Chat Tasks? Future State
+$JARVIS_VOICE_MODEL   = "llama3:8b"         # Voice Frontend? Future State
+$JARVIS_SUMMARY_MODEL = "llama4:scout"      # Summary Tasks? Future State
+$JARVIS_CODING_MODEL  = "qwen2.5-coder:7b"  # Dev Tasks? Future State
 
 # Log system information with modular switches
 function Write-SystemInfo {
@@ -150,7 +155,7 @@ function Test-PythonPackageInstalled {
         return $installed
     }
     catch {
-        Write-Log -Message "Error checking package ${$PackageName}: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
+        Write-Log -Message "Error checking package $PackageName $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
         return $false
     }
 }
@@ -181,7 +186,7 @@ function Install-PythonPackage {
         return $false
     }
     catch {
-        Write-Log -Message "Failed to install ${$PackageName}: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
+        Write-Log -Message "Failed to install $PackageName $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
         return $false
     }
 }
@@ -209,12 +214,9 @@ function Get-JarvisModel {
 # Ensure correct Ollama model is installed (replaces existing model installation logic)
 function Sync-JarvisModel {
     param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    
     $targetModel = Get-JarvisModel -LogFile $LogFile
     Write-Log -Message "Synchronizing Ollama model: $targetModel" -Level "INFO" -LogFile $LogFile
-    
     try {
-        $installedModels = ollama list 2>$null
         if (-not ($installedModels -match [regex]::Escape($targetModel))) {
             Write-Log -Message "Installing model: $targetModel" -Level "INFO" -LogFile $LogFile
             $pullResult = ollama pull $targetModel 2>&1
@@ -247,7 +249,7 @@ function Test-Tool {
     try {
         if ($commandPath = Get-Command $Command -ErrorAction SilentlyContinue) {
             $version = & $Command $VersionFlag 2>$null | Select-Object -First 1
-            Write-Log -Message "$Name found: $($version ?? 'version unknown')" -Level "SUCCESS" -LogFile $LogFile
+            Write-Log -Message "$Name found: $(if ($version) { $version } else { 'version unknown' })" -Level "SUCCESS" -LogFile $LogFile
             return $true
         }
         if (winget list --id $Id --exact 2>$null -and $LASTEXITCODE -eq 0) {
@@ -347,33 +349,27 @@ SECRET_KEY=dev_secret_key_$(Get-Random)
 # Comprehensive prerequisite checks with optimized output
 function Test-Prerequisites {
     param(
-        [Parameter(Mandatory = $true)] [string]$LogFile,
-        [switch]$IncludeDocker
+        [Parameter(Mandatory = $true)] [string]$LogFile
     )
     Write-Log -Message "Running system checks..." -Level "INFO" -LogFile $LogFile
     $results = @()
     $tools = @(
-        @{Id = "Git.Git"; Name = "Git"; Command = "git" },
-        @{Id = "Python.Python.3.11"; Name = "Python 3.11"; Command = "python" },
+        @{Id = "Python.Python.3.12"; Name = "Python 3.12"; Command = "python" },
         @{Id = "OpenJS.NodeJS"; Name = "Node.js"; Command = "node" },
-        @{Id = "Microsoft.VisualStudioCode"; Name = "Visual Studio Code"; Command = "code" },
         @{Id = "Ollama.Ollama"; Name = "Ollama"; Command = "ollama" }
     )
-    if ($IncludeDocker) {
-        $tools += @{Id = "Docker.DockerDesktop"; Name = "Docker Desktop"; Command = "docker" }
-    }
     foreach ($tool in $tools) {
         $status = Test-Tool -Id $tool.Id -Name $tool.Name -Command $tool.Command -LogFile $LogFile
-        $results += "$($status ? '✅' : '❌') $($tool.Name)"
+        $results += "$(if ($status) { '✅' } else { '❌' }) $($tool.Name)"
     }
     $wslStatus = Test-Tool -Id "Microsoft.WSL" -Name "WSL" -Command "wsl" -LogFile $LogFile
-    $results += "$($wslStatus ? '✅' : '❌') WSL"
+    $results += "$(if ($wslStatus) { '✅' } else { '❌' }) WSL"
     Write-Log -Message "=== VALIDATION RESULTS ===" -Level "INFO" -LogFile $LogFile
     foreach ($result in $results) {
-        Write-Log -Message $result -Level ($result -like "✅*" ? "SUCCESS" : "ERROR") -LogFile $LogFile
+        Write-Log -Message $result -Level $(if ($result -like "✅*") { "SUCCESS" } else { "ERROR" }) -LogFile $LogFile
     }
     $successCount = ($results | Where-Object { $_ -like "✅*" }).Count
-    Write-Log -Message "Validation: $successCount/$($results.Count) tools ready" -Level ($successCount -eq $results.Count ? "SUCCESS" : "ERROR") -LogFile $LogFile
+    Write-Log -Message "Validation: $successCount/$($results.Count) tools ready" -Level $(if ($successCount -eq $results.Count) { "SUCCESS" } else { "ERROR" }) -LogFile $LogFile
     return $successCount -eq $results.Count
 }
 
@@ -422,7 +418,7 @@ function New-DirectoryStructure {
                 $created++
             }
             catch {
-                Write-Log -Message "Failed to create directory ${$dir}: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
+                Write-Log -Message "Failed to create directory $dir $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
             }
         }
         else {
@@ -431,29 +427,6 @@ function New-DirectoryStructure {
     }
     Write-Log -Message "Directory creation complete: $created created" -Level "SUCCESS" -LogFile $LogFile
     return $true
-}
-
-# Install Visual C++ Build Tools
-function Install-VisualCppBuildTools {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    Write-Log -Message "Checking Visual C++ Build Tools..." -Level "INFO" -LogFile $LogFile
-    try {
-        $vcInstalled = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\VisualStudio\*\VC\*" -ErrorAction SilentlyContinue) -or
-        (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | 
-        Where-Object { $_.DisplayName -like "*Visual Studio*Build Tools*" -or $_.DisplayName -like "*Microsoft Visual C++*" })
-        if ($vcInstalled) {
-            Write-Log -Message "Visual C++ Build Tools found" -Level "SUCCESS" -LogFile $LogFile
-            return $true
-        }
-    }
-    catch { Write-Log -Message "Error checking Visual C++ Build Tools: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile }
-    Write-Log -Message "Installing Visual C++ Build Tools (required for PyAudio)..." -Level "INFO" -LogFile $LogFile
-    $success = Install-Tool -Id "Microsoft.VisualStudio.2022.BuildTools" -Name "Visual C++ Build Tools" -Command "cl" -LogFile $LogFile
-    if (-not $success) {
-        Write-Log -Message "PyAudio installation may fail without Visual C++ Build Tools" -Level "WARN" -LogFile $LogFile
-        Write-Log -Message "Manually install from: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -Level "INFO" -LogFile $LogFile
-    }
-    return $success
 }
 
 # Install and verify Ollama with model downloading
@@ -515,7 +488,7 @@ function Install-OllamaAndModels {
             }
         }
         catch {
-            Write-Log -Message "Could not verify/download ${$model}: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
+            Write-Log -Message "Could not verify/download $model $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
             Write-Log -Message "Run manually: ollama pull $model" -Level "INFO" -LogFile $LogFile
         }
     }
@@ -576,10 +549,25 @@ function Get-AvailableHardware {
             $hardware.GPU.Available = $true
             $gpu = $gpus | Sort-Object -Property AdapterRAM -Descending | Select-Object -First 1
             $hardware.GPU.Name = $gpu.Name
-            $hardware.GPU.VRAM = [math]::Round($gpu.AdapterRAM / 1GB, 2)
             if ($gpu.Name -match "NVIDIA|RTX|GTX") {
                 $hardware.GPU.Type = "NVIDIA"
                 $hardware.GPU.CUDACapable = Test-Command -Command "nvidia-smi" -LogFile $LogFile
+                if ($hardware.GPU.CUDACapable) {
+                    try {
+                        $nvidiaSmiOutput = (nvidia-smi --query-gpu=memory.total --format=noheader,nounits,csv)
+                        $vramMiB = [int]$nvidiaSmiOutput.Trim()
+                        $hardware.GPU.VRAM = [math]::Round($vramMiB / 1024, 2)
+                        Write-Log -Message "NVIDIA VRAM detected via nvidia-smi: $($hardware.GPU.VRAM) GB" -Level "INFO" -LogFile $LogFile
+                    }
+                    catch {
+                        Write-Log -Message "Failed to get NVIDIA VRAM from nvidia-smi: $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile
+                        $hardware.GPU.VRAM = [math]::Round($gpu.AdapterRAM / 1GB, 2)
+                    }
+                }
+                else {
+                    $hardware.GPU.VRAM = [math]::Round($gpu.AdapterRAM / 1GB, 2)
+                    Write-Log -Message "NVIDIA VRAM detected via Win32_VideoController (nvidia-smi not found): $($hardware.GPU.VRAM) GB" -Level "WARN" -LogFile $LogFile
+                }
                 if (!$hardware.NPU.Available) { $hardware.OptimalConfig = "NVIDIA_GPU" }
             }
             elseif ($gpu.Name -match "AMD") {
@@ -597,9 +585,9 @@ function Get-AvailableHardware {
             else {
                 # Unknown GPU - Enhanced detection for unrecognized hardware
                 $hardware.GPU.Type = "Unknown"
-                $hardware.GPU.DeviceID = $gpu.PNPDeviceID ?? "N/A"
-                $hardware.GPU.Vendor = ($gpu.Name -split ' ')[0] ?? "Unknown Vendor"
-                $hardware.GPU.Model = $gpu.Name ?? "Unrecognized GPU"
+                $hardware.GPU.DeviceID = if ($gpu.PNPDeviceID) { $gpu.PNPDeviceID } else { "N/A" }
+                $hardware.GPU.Vendor = if ($gpu.Name) { ($gpu.Name -split ' ')[0] } else { "Unknown Vendor" }
+                $hardware.GPU.Model = if ($gpu.Name) { $gpu.Name } else { "Unrecognized GPU" }
                 # Estimate VRAM if not detected properly
                 if ($hardware.GPU.VRAM -eq 0) {
                     $hardware.GPU.VRAM = [Math]::Min(($hardware.CPU.Cores * 0.5), 8)  # Conservative estimate
@@ -633,7 +621,7 @@ function Get-AvailableHardware {
                 $hardware.NPU.Name = "Unknown NPU/AI Accelerator ($($aiDevice.Name))"
                 $hardware.NPU.Type = "Unknown_NPU"
                 $hardware.NPU.TOPS = 10  # Conservative estimate
-                $hardware.NPU.DeviceID = $aiDevice.PNPDeviceID ?? "N/A"
+                $hardware.NPU.DeviceID = if ($aiDevice.PNPDeviceID) { $aiDevice.PNPDeviceID } else { "N/A" }
                 # Only override OptimalConfig if no known NPU was already detected
                 if ($hardware.OptimalConfig -notmatch "NPU$") {
                     $hardware.OptimalConfig = "Unknown_NPU"
@@ -859,9 +847,88 @@ function Get-OptimalConfiguration {
                 "OLLAMA_MAX_LOADED_MODELS" = "1"
                 "OLLAMA_NUM_THREAD"        = $threads.ToString()
             }
-            $config.Instructions += "🔧 CPU optimization applied with $threads threads"
+            $config.Instructions += "CPU optimization applied with $threads threads"
             $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
         }
     }
     return $config
+}
+
+function Stop-OllamaService {
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
+    Write-Log -Message "Stopping Ollama service..." -Level INFO -LogFile $LogFile
+    try {
+        Get-Process -Name "ollama" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+        Write-Log -Message "Ollama service stopped" -Level SUCCESS -LogFile $LogFile
+        return $true
+    }
+    catch {
+        Write-Log -Message "Error stopping Ollama service: $($_.Exception.Message)" -Level WARN -LogFile $LogFile
+        return $false
+    }
+}
+
+function Test-OllamaService {
+    param( [Parameter(Mandatory = $true)] [string]$LogFile )
+    Write-Log -Message "Testing Ollama service availability..." -Level INFO -LogFile $LogFile
+    try {
+        # Test if Ollama service is running
+        if (Test-OllamaRunning -LogFile $LogFile) {
+            Write-Log -Message "Ollama service is running and accessible" -Level SUCCESS -LogFile $LogFile
+            return $true
+        }
+        else {
+            Write-Log -Message "Ollama service is not running" -Level INFO -LogFile $LogFile
+            return $false
+        }
+    }
+    catch {
+        Write-Log -Message "Error testing Ollama service: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+        return $false
+    }
+}
+
+function Start-OllamaService {
+    param( 
+        [Parameter(Mandatory = $true)] [string]$LogFile,
+        [switch]$ForceRestart
+    )
+    Write-Log -Message "Starting Ollama service..." -Level INFO -LogFile $LogFile
+    
+    if ($ForceRestart -and (Test-OllamaService -LogFile $LogFile)) {
+        Write-Log -Message "Force restart requested - stopping existing service" -Level INFO -LogFile $LogFile
+        Stop-OllamaService -LogFile $LogFile
+    }
+    
+    if (Test-OllamaService -LogFile $LogFile) {
+        Write-Log -Message "Ollama service already running - no action needed" -Level INFO -LogFile $LogFile
+        return $true
+    }
+    try {
+        Write-Log -Message "Attempting to start Ollama service..." -Level INFO -LogFile $LogFile
+        $ollamaProcess = Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -PassThru -ErrorAction Stop
+        # Wait for service to start
+        $attempts = 0
+        $maxAttempts = 15
+        while (-not (Test-OllamaService -LogFile $LogFile) -and $attempts -lt $maxAttempts) {
+            Start-Sleep -Seconds 2
+            $attempts++
+            Write-Log -Message "Waiting for Ollama service to start (attempt $attempts/$maxAttempts)..." -Level INFO -LogFile $LogFile
+        }
+        if (Test-OllamaService -LogFile $LogFile) {
+            Write-Log -Message "Ollama service started successfully (PID: $($ollamaProcess.Id))" -Level SUCCESS -LogFile $LogFile
+            return $true
+        }
+        else {
+            Write-Log -Message "Ollama service failed to start within timeout" -Level ERROR -LogFile $LogFile
+            Write-Log -Message "REMEDIATION: Try running 'ollama serve' manually to check for errors" -Level ERROR -LogFile $LogFile
+            return $false
+        }
+    }
+    catch {
+        Write-Log -Message "Error starting Ollama service: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "REMEDIATION: Ensure Ollama is properly installed and try manual startup" -Level ERROR -LogFile $LogFile
+        return $false
+    }
 }

@@ -8,23 +8,22 @@ JARVIS (Just A Rather Very Intelligent System) is a full-stack AI assistant that
 
 ## Key Features
 
-- 🤖 **Local AI Processing**: Runs entirely on your machine using Ollama - no cloud dependencies
-- 🎤 **Modern Voice Stack**: Speech-to-text (faster-whisper), text-to-speech (coqui-tts), and wake word detection (openWakeWord)
+- 📊 **Performance Benchmarking**: Built-in benchmarking to measure AI response times
 - 🚀 **Hardware Acceleration**: Automatic NPU/GPU detection and optimization (NVIDIA, AMD, Intel, Qualcomm)
+- 🤖 **Local AI Processing**: Runs entirely on your machine using Ollama - no cloud dependencies
 - 💬 **Personality System**: Configurable AI personality inspired by MCU's JARVIS with voice responses
 - ⚡ **Cross-Platform**: Optimized for both x64 (Intel/AMD) and ARM64 (Snapdragon X)
 - 🔄 **Fallback Mode**: Continues working even when AI services are unavailable
-- 📊 **Performance Benchmarking**: Built-in benchmarking to measure AI response times
 - 🎨 **Modern UI**: React-based chat interface with real-time updates
+- 🎤 **Modern Voice Stack**: STT (faster-whisper), TTS (coqui-tts), wake word (openWakeWord), audio library (sounddevice)
 
 ## Prerequisites
 
 ### Required Software
 - **Windows 11** (x64 or ARM64)
-- **PowerShell 7+** 
-- **Python 3.8+** (3.12+ recommended)
-- **Node.js 16+**
-- **Git**
+- **PowerShell 5+** (7+ recommended)
+- **Python 3.12+** (required for voice integration)
+- **Node.js 16+** (LTS recommended)
 
 ### Hardware Support
 - **NPU**: Qualcomm Hexagon (Snapdragon X), Intel AI Boost (Core Ultra)
@@ -43,17 +42,20 @@ git clone https://github.com/bentman/jarvis.git
 pushd jarvis
 
 # Run setup scripts in sequence
-.\01-Prerequisites.ps1             # Install system dependencies
-.\02-FastApiBackend.ps1            # Setup backend with virtual environment
-.\03-IntegrateOllama.ps1           # Integrate AI services with personality
-.\04a-OllamaSetup.ps1              # Install Ollama and models
-.\04c-OllamaTuning.ps1             # Optimize for your hardware
-.\05-ReactFrontend.ps1             # Setup React frontend
+.\01-Prerequisites.ps1         # Install system dependencies
+.\02-FastApiBackend.ps1       # Setup backend with virtual environment
+.\03-IntegrateOllama.ps1      # Integrate AI services with personality
+.\04a-OllamaSetup.ps1         # Install Ollama and models
+.\04c-OllamaTuning.ps1        # Optimize for your hardware
+.\05-ReactFrontend.ps1        # Setup React frontend
 
 # Voice integration (optional but recommended)
-.\06a-VoiceSetup.ps1               # Setup voice service architecture
-.\06b-VoiceBackendIntegration.ps1  # Integrate voice with FastAPI
-.\06c-VoiceInstall.ps1             # Install voice dependencies
+.\06a-VoiceSetup.ps1          # Setup voice service architecture
+.\06b-VoiceBackend.ps1        # Integrate voice with FastAPI
+.\06c-VoiceInstall.ps1        # Install voice dependencies
+.\07a-VoiceHooks.ps1          # Voice TypeScript hooks and interfaces
+.\07b-VoiceComponents.ps1     # Voice React UI components
+.\07c-VoiceIntegration.ps1    # Voice API integration and chat updates
 ```
 
 ### Hardware Optimization
@@ -66,9 +68,6 @@ The system automatically detects and optimizes for your hardware:
 
 # For NVIDIA GPUs - installs CUDA if needed
 .\04c-OllamaTuning.ps1 -Install
-
-# Benchmark your system
-.\04c-OllamaTuning.ps1 -Benchmark
 ```
 
 ## Usage
@@ -102,7 +101,6 @@ Quick health checks:
 1. Open your browser to **http://localhost:3000**
 2. JARVIS will greet you with personality
 3. Start chatting - responses are powered by local AI
-4. If voice is enabled, say "jarvis" or "hey jarvis" to activate voice mode
 
 ### API Access
 
@@ -133,6 +131,22 @@ With voice integration enabled, JARVIS supports:
 
 ## Configuration
 
+### Environment Settings
+
+The `.env` file controls system settings:
+```env
+OLLAMA_MODEL=phi3:mini       # AI model to use
+API_HOST=0.0.0.0             # Backend host
+API_PORT=8000                # Backend port
+
+# Voice settings (if voice integration enabled)
+JARVIS_WAKE_WORDS=jarvis,hey jarvis
+FASTER_WHISPER_MODEL=base
+COQUI_TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
+VOICE_SAMPLE_RATE=16000
+AUDIO_LIBRARY=sounddevice
+```
+
 ### Personality Customization
 
 Edit/Create `.\jarvis_personality.json` to customize JARVIS's behavior:
@@ -146,6 +160,7 @@ Edit/Create `.\jarvis_personality.json` to customize JARVIS's behavior:
   },
   "voice_settings": {
     "voice_stack": "faster-whisper + coqui-tts + openWakeWord",
+    "audio_library": "sounddevice",
     "wake_words": ["jarvis", "hey jarvis"],
     "speech_rate": 1.0,
     "voice_pitch": 0.5,
@@ -161,21 +176,6 @@ Edit/Create `.\jarvis_personality.json` to customize JARVIS's behavior:
 
 Changes take effect after restarting the backend.
 
-### Environment Settings
-
-The `.env` file controls system settings:
-```env
-OLLAMA_MODEL=phi3:mini        # AI model to use
-API_HOST=0.0.0.0             # Backend host
-API_PORT=8000                # Backend port
-
-# Voice settings (if voice integration enabled)
-JARVIS_WAKE_WORDS=jarvis,hey jarvis
-FASTER_WHISPER_MODEL=base
-COQUI_TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
-VOICE_SAMPLE_RATE=16000
-```
-
 ### Supported AI Models
 
 Recommended models by hardware:
@@ -189,14 +189,11 @@ Example benchmarks from real hardware:
 
 | Hardware | Model | Avg Response | Tokens/sec | Category |
 |----------|-------|--------------|------------|----------|
-| GTX 1650 SUPER | phi3:mini | 4.9s | 15-29 | Acceptable |
-| Snapdragon X NPU | phi3:mini | 4.5s | 27-28 | Acceptable |
-| RTX 4090 | llama3.1:8b | 0.8s | 60-80 | Excellent |
+| RTX 3060 (12GB) | phi3:mini | 2.7s | 106-132 | Good |
+| Snapdragon X NPU | phi3:mini | 3.9s | 27-31 | Acceptable |
+| GTX 1650 (4GB) | phi3:mini | 4.9s | 25-29 | Acceptable |
 
-Run your own benchmark:
-```powershell
-.\04c-OllamaTuning.ps1 -Benchmark
-```
+*Performance varies based on system optimization and load
 
 ## Development
 
@@ -210,8 +207,11 @@ Run your own benchmark:
 - `04c-OllamaTuning.ps1` - Performance optimization
 - `05-ReactFrontend.ps1` - Frontend setup
 - `06a-VoiceSetup.ps1` - Voice service architecture
-- `06b-VoiceBackendIntegration.ps1` - Voice FastAPI integration
+- `06b-VoiceBackend.ps1` - Voice FastAPI integration
 - `06c-VoiceInstall.ps1` - Voice dependencies installation
+- `07a-VoiceHooks.ps1` - Voice TypeScript hooks and interfaces
+- `07b-VoiceComponents.ps1` - Voice React UI components  
+- `07c-VoiceIntegration.ps1` - Voice API integration and chat updates
 
 ### Quick Commands
 
@@ -242,7 +242,7 @@ Future enhancements to explore:
 ## System Requirements
 
 ### Minimum
-- Windows 11 (22H2 or later)
+- Windows 11
 - 8GB RAM
 - 20GB free disk space
 - Internet for initial setup

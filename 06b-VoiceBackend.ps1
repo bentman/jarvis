@@ -1,6 +1,6 @@
 # 06b-VoiceBackendIntegration.ps1 - Voice Backend Integration & Testing Infrastructure  
 # Purpose: Integrate voice service with FastAPI backend and create testing infrastructure
-# Last edit: 2025-07-24 - Focused on backend integration and testing only (separation of concerns)
+# Last edit: 2025-08-06 - Manual inpection and alignments
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "2.2.0"
+$scriptVersion = "4.0.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -34,6 +34,8 @@ Write-SystemInfo -ScriptName $scriptPrefix -Version $scriptVersion -ProjectRoot 
     Run       = $Run
 }
 
+$hardware = Get-AvailableHardware -LogFile $logFile
+
 # Define script-level paths using critical backend pattern
 $backendDir = Join-Path $projectRoot "backend"
 $venvDir = Join-Path $backendDir ".venv"
@@ -48,24 +50,21 @@ function Test-Prerequisites {
     Write-Log -Message "Testing prerequisites..." -Level INFO -LogFile $LogFile
     # Check that 06a has been run first
     if (-not (Test-Path $voiceServicePath)) {
-        Write-Log -Message "Voice service not found - voice architecture setup not completed" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Run 06a-VoiceSetup.ps1 first" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Voice service not found. Run 06a-VoiceSetup.ps1." -Level ERROR -LogFile $LogFile
         return $false
     }
     # Check voice service contains modern stack
     $serviceContent = Get-Content $voiceServicePath -Raw
     if (-not ($serviceContent -match "faster-whisper" -and $serviceContent -match "coqui" -and $serviceContent -match "openWakeWord")) {
-        Write-Log -Message "Voice service does not contain modern voice stack" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Re-run 06a-VoiceSetup.ps1 to update voice service" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Voice service does not contain modern voice stack. Re-run 06a-VoiceSetup.ps1." -Level ERROR -LogFile $LogFile
         return $false
     }
     # Check main.py exists for backend integration
     if (-not (Test-Path $mainPath)) {
-        Write-Log -Message "FastAPI main.py not found - backend not set up" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Run 02-FastApiBackend.ps1 first" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ FastAPI main.py not found. Run 02-FastApiBackend.ps1." -Level ERROR -LogFile $LogFile
         return $false
     }
-    Write-Log -Message "All prerequisites verified" -Level SUCCESS -LogFile $LogFile
+    Write-Log -Message "✅ All prerequisites verified" -Level SUCCESS -LogFile $LogFile
     return $true
 }
 
@@ -74,8 +73,8 @@ function Update-FastAPIWithVoiceIntegration {
     Write-Log -Message "Integrating voice service with FastAPI backend..." -Level INFO -LogFile $LogFile
     # Check current main.py status
     $mainContent = Get-Content $mainPath -Raw
-    if ($mainContent -match "voice_service" -and $mainContent -match "2\.2\.0") {
-        Write-Log -Message "FastAPI already integrated with voice service v2.2.0" -Level INFO -LogFile $LogFile
+    if ($mainContent -match "voice_service" -and $mainContent -match "2\.3\.0") {
+        Write-Log -Message "FastAPI already integrated with voice service v$($JARVIS_APP_VERSION)" -Level INFO -LogFile $LogFile
         return $true
     }
     # Backup existing main.py
@@ -87,6 +86,7 @@ function Update-FastAPIWithVoiceIntegration {
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -101,7 +101,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Jarvis AI Assistant",
     description="AI Assistant Backend with Ollama and Modern Voice Integration",
-    version="2.2.0"
+    version="$($JARVIS_APP_VERSION)"
 )
 
 app.add_middleware(
@@ -117,6 +117,11 @@ class ChatMessage(BaseModel):
 
 class VoiceMessage(BaseModel):
     content: str
+    device_id: Optional[str] = None
+
+class VoiceListenRequest(BaseModel):
+    timeout: int = 10
+    device_id: Optional[str] = None
 
 class VoiceConfigureRequest(BaseModel):
     command: str
@@ -252,12 +257,12 @@ async def voice_config():
 @app.post("/api/voice/speak")
 async def voice_speak(message: VoiceMessage):
     """Convert text to speech using coqui-tts"""
-    return await voice_service.speak(message.content)
+    return await voice_service.speak(message.content, message.device_id)
 
 @app.post("/api/voice/listen")
-async def voice_listen():
+async def voice_listen(request: VoiceListenRequest = VoiceListenRequest()):
     """Convert speech to text using faster-whisper"""
-    return await voice_service.listen()
+    return await voice_service.listen(request.timeout, request.device_id)
 
 @app.post("/api/voice/wake")
 async def voice_wake():
@@ -286,11 +291,11 @@ if __name__ == "__main__":
     
     try {
         Set-Content -Path $mainPath -Value $fastApiCode -Encoding UTF8
-        Write-Log -Message "FastAPI backend updated with voice integration v2.2.0" -Level SUCCESS -LogFile $LogFile
+        Write-Log -Message "✅ FastAPI backend updated with voice integration v2.3.0" -Level SUCCESS -LogFile $LogFile
         return $true
     }
     catch {
-        Write-Log -Message "Failed to update FastAPI backend: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Failed to update FastAPI backend: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
         return $false
     }
 }
@@ -510,11 +515,11 @@ def test_backend_version_updated():
             New-Item -ItemType Directory -Path $testsDir -Force | Out-Null
         }
         Set-Content -Path $testPath -Value $voiceTests -Encoding UTF8
-        Write-Log -Message "Voice integration tests created successfully" -Level SUCCESS -LogFile $LogFile
+        Write-Log -Message "✅ Voice integration tests created successfully" -Level SUCCESS -LogFile $LogFile
         return $true
     }
     catch {
-        Write-Log -Message "Failed to create voice integration tests: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Failed to create voice integration tests: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
         return $false
     }
 }
@@ -719,11 +724,11 @@ if (-not ($TestMic -or $TestTTS -or $TestAPI -or $Interactive -or $ShowConfig)) 
     
     try {
         Set-Content -Path "test_voice.ps1" -Value $demoScript -Encoding UTF8
-        Write-Log -Message "Voice testing demo script created: test_voice.ps1" -Level SUCCESS -LogFile $LogFile
+        Write-Log -Message "✅ Voice testing demo script created: test_voice.ps1" -Level SUCCESS -LogFile $LogFile
         return $true
     }
     catch {
-        Write-Log -Message "Failed to create demo script: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Failed to create demo script: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
         return $false
     }
 }
@@ -732,8 +737,8 @@ function Test-BackendIntegration {
     param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Testing backend voice integration..." -Level INFO -LogFile $LogFile
     if (-not (Test-Path $venvPy)) {
-        Write-Log -Message "Virtual environment not found - cannot test backend integration" -Level ERROR -LogFile $LogFile
-        Write-Log -Message "REMEDIATION: Run 02-FastApiBackend.ps1 first" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Virtual environment not found - cannot test backend integration" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Run 02-FastApiBackend.ps1 first" -Level ERROR -LogFile $LogFile
         return $false
     }
     # Test backend can import voice service
@@ -756,11 +761,11 @@ except Exception as e:
         
         $importResult = $importTest | & $venvPy 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Log -Message "Voice service import test passed: $importResult" -Level SUCCESS -LogFile $LogFile
+            Write-Log -Message "✅ Voice service import test passed: $importResult" -Level SUCCESS -LogFile $LogFile
         }
         else {
-            Write-Log -Message "Voice service import test failed: $importResult" -Level ERROR -LogFile $LogFile
-            Write-Log -Message "REMEDIATION: Ensure 06a-VoiceSetup.ps1 completed successfully and voice service exists" -Level ERROR -LogFile $LogFile
+            Write-Log -Message "❌ Voice service import test failed: $importResult" -Level ERROR -LogFile $LogFile
+            Write-Log -Message "❌ Ensure 06a-VoiceSetup.ps1 completed successfully and voice service exists." -Level ERROR -LogFile $LogFile
             return $false
         }
         # Test FastAPI app can start with voice integration
@@ -786,17 +791,17 @@ except Exception as e:
         
         $appResult = $appTest | & $venvPy 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Log -Message "FastAPI app integration test passed: $appResult" -Level SUCCESS -LogFile $LogFile
+            Write-Log -Message "✅ FastAPI app integration test passed: $appResult" -Level SUCCESS -LogFile $LogFile
             return $true
         }
         else {
-            Write-Log -Message "FastAPI app integration test failed: $appResult" -Level ERROR -LogFile $LogFile
-            Write-Log -Message "REMEDIATION: Check backend main.py syntax and voice service integration" -Level ERROR -LogFile $LogFile
+            Write-Log -Message "❌ FastAPI app integration test failed: $appResult" -Level ERROR -LogFile $LogFile
+            Write-Log -Message "❌ Check backend main.py syntax and voice service integration." -Level ERROR -LogFile $LogFile
             return $false
         }
     }
     catch {
-        Write-Log -Message "Backend integration test error: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+        Write-Log -Message "❌ Backend integration test error: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
         return $false
     }
     finally { Pop-Location }
@@ -872,23 +877,22 @@ try {
         Write-Log -Message "Testing backend integration..." -Level INFO -LogFile $logFile
         $setupResults += @{Name = "Backend Integration Test"; Success = (Test-BackendIntegration -LogFile $logFile) }
     }
-    # Summary
-    Write-Log -Message "=== SETUP SUMMARY ===" -Level INFO -LogFile $logFile
-    $successCount = 0
-    $failCount = 0
-    foreach ($result in $setupResults) {
-        if ($result.Success) {
-            Write-Log -Message "$($result.Name) - SUCCESS" -Level SUCCESS -LogFile $logFile
-            $successCount++
-        }
-        else {
-            Write-Log -Message "$($result.Name) - FAILED" -Level ERROR -LogFile $logFile
-            $failCount++
-        }
-    }
-    Write-Log -Message "Setup Results: $successCount successful, $failCount failed" -Level INFO -LogFile $logFile
+
+    Write-Log -Message "=== FINAL RESULTS ===" -Level INFO -LogFile $logFile
+    $successCount = ($setupResults | Where-Object { $_.Success }).Count
+    $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
+    Write-Log -Message "SUCCESS: $successCount components" -Level SUCCESS -LogFile $logFile
     if ($failCount -gt 0) {
-        Write-Log -Message "Voice backend integration setup had failures" -Level ERROR -LogFile $logFile
+        Write-Log -Message "❌ FAILED: $failCount components" -Level ERROR -LogFile $logFile
+    }
+    foreach ($result in $setupResults) {
+        $status = if ($result.Success) { 'SUCCESS' } else { 'FAILED' }
+        $level = if ($result.Success) { "SUCCESS" } else { "ERROR" }
+        Write-Log -Message "$($result.Name): $status" -Level $level -LogFile $logFile
+    }
+
+    if ($failCount -gt 0) {
+        Write-Log -Message "❌ Voice backend integration setup had failures" -Level ERROR -LogFile $logFile
         Stop-Transcript
         exit 1
     }
@@ -907,7 +911,7 @@ try {
     Write-Log -Message "4. Run tests: Push-Location; Set-Location backend; .\.venv\Scripts\python.exe -m pytest tests/test_voice_integration.py -v; Pop-Location" -Level INFO -LogFile $logFile
 }
 catch {
-    Write-Log -Message "Error: $_" -Level ERROR -LogFile $logFile
+    Write-Log -Message "❌ Error: $_" -Level ERROR -LogFile $logFile
     Stop-Transcript
     exit 1
 }

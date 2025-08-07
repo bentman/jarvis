@@ -1,6 +1,6 @@
 # 03-IntegrateOllama.ps1 - AI integration into FastAPI backend
 # Purpose: Add Ollama-based AIService, personality config, and tests
-# Last edit: 2025-07-21 - fix virtual environment handling, add auto-creation if missing
+# Last edit: 2025-08-06 - Manual inpection and alignments
 
 param(
     [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.4.0"
+$scriptVersion = "5.0.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -44,7 +44,7 @@ $venvPy = Join-Path $venvDir "Scripts\python.exe"
 function Test-BackendExists {
     param( [Parameter(Mandatory = $true)] [string]$LogFile )
     $exists = (Test-Path "backend/api/main.py") -and (Test-Path "backend/requirements.txt")
-    if (-not $exists) { Write-Log -Message "Backend not found. Please run 02-FastApiBackend.ps1 first." -Level "ERROR" -LogFile $LogFile }
+    if (-not $exists) { Write-Log -Message "Backend not found. Run 02-FastApiBackend.ps1." -Level "ERROR" -LogFile $LogFile }
     return $exists
 }
 
@@ -54,7 +54,7 @@ function Add-OllamaDependency {
     Write-Log -Message "Adding Ollama client to backend requirements..." -Level "INFO" -LogFile $LogFile
     $requirementsPath = "backend/requirements.txt"
     if (-not (Test-Path $requirementsPath)) {
-        Write-Log -Message "Backend requirements.txt not found - run 02-FastApiBackend.ps1 first" -Level "ERROR" -LogFile $LogFile
+        Write-Log -Message "Backend requirements.txt not found. Run 02-FastApiBackend.ps1." -Level "ERROR" -LogFile $LogFile
         return $false
     }
     $requirements = Get-Content $requirementsPath
@@ -71,9 +71,7 @@ function Add-OllamaDependency {
             return $false
         }
     }
-    else {
-        Write-Log -Message "Ollama dependency already present in requirements.txt" -Level "SUCCESS" -LogFile $LogFile
-    }
+    else { Write-Log -Message "Ollama dependency already present in requirements.txt" -Level "SUCCESS" -LogFile $LogFile }
     return $true
 }
 
@@ -339,141 +337,6 @@ ai_service = AIService()
     }
 }
 
-# Update main FastAPI application
-function Update-FastAPIApplication {
-    param( [Parameter(Mandatory = $true)] [string]$LogFile )
-    Write-Log -Message "Updating main application with AI integration..." -Level "INFO" -LogFile $LogFile
-    $mainPath = "backend/api/main.py"
-    if (-not (Test-Path $mainPath)) {
-        Write-Log -Message "Main application not found - run 02-FastApiBackend.ps1 first" -Level "ERROR" -LogFile $LogFile
-        return $false
-    }
-    $existing = Get-Content $mainPath -Raw
-    if ($existing -match "ai_service" -and $existing -match "1\.1\.0") {
-        Write-Log -Message "Main application already has AI integration" -Level "SUCCESS" -LogFile $LogFile
-        return $true
-    }
-    Copy-Item $mainPath "$mainPath.backup" -ErrorAction SilentlyContinue
-    $updatedMain = @"
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from datetime import datetime
-import os
-from dotenv import load_dotenv
-import logging
-from services.ai_service import ai_service
-
-load_dotenv()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(
-    title="Jarvis AI Assistant",
-    description="AI Assistant Backend with Ollama Integration",
-    version="1.1.0"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-class ChatMessage(BaseModel):
-    content: str
-
-class ChatResponse(BaseModel):
-    response: str
-    mode: str
-    model: str
-    timestamp: str
-
-@app.get("/")
-async def root():
-    return {
-        "message": "Jarvis AI Assistant Backend",
-        "status": "running",
-        "version": "1.1.0",
-        "features": ["chat", "ai_integration", "fallback_mode"],
-        "docs": "/docs"
-    }
-
-@app.get("/api/health")
-async def health_check():
-    ai_status = await ai_service.get_status()
-    return {
-        "status": "healthy",
-        "service": "jarvis-backend",
-        "version": "1.1.0",
-        "ai_integration": ai_status,
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(message: ChatMessage):
-    logger.info(f"Chat request: {message.content}")
-    result = await ai_service.generate_response(message.content)
-    return ChatResponse(
-        response=result["response"],
-        mode=result["mode"],
-        model=result["model"],
-        timestamp=result["timestamp"]
-    )
-
-@app.get("/api/status")
-async def get_status():
-    ai_status = await ai_service.get_status()
-    return {
-        "backend": "running",
-        "version": "1.1.0",
-        "ai_service": ai_status,
-        "features": {
-            "chat": True,
-            "ai_integration": ai_status["ai_available"],
-            "fallback_mode": True,
-            "health_check": True
-        }
-    }
-
-@app.get("/api/ai/status")
-async def ai_status():
-    return await ai_service.get_status()
-
-@app.get("/api/ai/test")
-async def test_ai():
-    is_available = await ai_service.is_available()
-    if is_available:
-        test_result = await ai_service.generate_response("Hello, are you working?")
-        return {
-            "ai_available": True,
-            "test_successful": True,
-            "test_response": test_result
-        }
-    return {
-        "ai_available": False,
-        "test_successful": False,
-        "message": "AI service not available - using fallback mode"
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-"@
-    
-    try {
-        Set-Content -Path $mainPath -Value $updatedMain -ErrorAction Stop
-        Write-Log -Message "Main application updated with AI integration" -Level "SUCCESS" -LogFile $LogFile
-        return $true
-    }
-    catch {
-        Write-Log -Message "Failed to update main application: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
-        return $false
-    }
-}
-
 # Create AI integration tests
 function New-AIIntegrationTests {
     param( [Parameter(Mandatory = $true)] [string]$LogFile )
@@ -560,7 +423,7 @@ function Install-AIDependencies {
     param( [string]$LogFile )
     Write-Log -Message "Installing AI integration dependencies..." -Level "INFO" -LogFile $LogFile
     if (-not (Test-Path $venvPy)) {
-        Write-Log -Message "Virtual environment Python not found at $venvPy - run 02-FastApiBackend.ps1 first" -Level "ERROR" -LogFile $LogFile
+        Write-Log -Message "Virtual environment Python not found at $venvPy. Run 02-FastApiBackend.ps1." -Level "ERROR" -LogFile $LogFile
         return $false
     }
     try {
@@ -569,8 +432,10 @@ function Install-AIDependencies {
         if ($LASTEXITCODE -eq 0) { Write-Log -Message "Backend requirements installed successfully" -Level "SUCCESS" -LogFile $LogFile }
         Write-Log -Message "Installing ollama>=0.4.5..." -Level "INFO" -LogFile $LogFile
         & $venvPy -m pip install ollama>=0.4.5 --quiet
+        Write-Log -Message "Installing pytest-asyncio>=0.23.0..." -Level "INFO" -LogFile $LogFile
+        & $venvPy -m pip install pytest-asyncio>=0.23.0 --quiet
         if ($LASTEXITCODE -eq 0) {
-            Write-Log -Message "Ollama package installed successfully" -Level "SUCCESS" -LogFile $LogFile
+            Write-Log -Message "AI integration packages installed successfully" -Level "SUCCESS" -LogFile $LogFile
             return $true
         }
         else {
@@ -644,14 +509,18 @@ function Test-AIIntegrationSetup {
             }
             catch { $status = $false }
         }
-        $validationResults += "$($status ? '✅' : '❌') Python Package: $package"
+        $checkmark = if ($status) { '✅' } else { '❌' }
+        $validationResults += "$checkmark Python Package: $package"
     }
     $mainPath = Join-Path $backendDir "api\main.py"
     if (Test-Path $mainPath) {
         $mainContent = Get-Content $mainPath -Raw
-        $validationResults += ($mainContent -match "ai_service" -and $mainContent -match "1\.1\.0") ? 
-        "✅ Backend: AI-enhanced FastAPI (v1.1.0)" : 
-        "❌ Backend: Missing AI integration"
+        if ($mainContent -match "ai_service" -and $mainContent -match "1\.1\.0") {
+            $validationResults += "✅ Backend: AI-enhanced FastAPI (v1.1.0)"
+        }
+        else {
+            $validationResults += "❌ Backend: Missing AI integration"
+        }
     }
     $personalityPath = Join-Path $projectRoot "jarvis_personality.json"
     if (Test-Path $personalityPath) {
@@ -664,15 +533,22 @@ function Test-AIIntegrationSetup {
         catch { $validationResults += "⚠️  Personality Config: File exists but may be malformed" }
     }
     $envValid = Test-EnvironmentConfig -LogFile $LogFile
-    $validationResults += $envValid ? "✅ Environment Config: Valid" : "❌ Environment Config: Invalid or missing OLLAMA_MODEL"
+    if ($envValid) {
+        $validationResults += "✅ Environment Config: Valid"
+    }
+    else {
+        $validationResults += "❌ Environment Config: Invalid or missing OLLAMA_MODEL"
+    }
     Write-Log -Message "=== AI INTEGRATION VALIDATION RESULTS ===" -Level "INFO" -LogFile $LogFile
     foreach ($result in $validationResults) {
-        Write-Log -Message $result -Level ($result -like "✅*" ? "SUCCESS" : ($result -like "⚠️*" ? "WARN" : "ERROR")) -LogFile $LogFile
+        $level = if ($result -like "✅*") { "SUCCESS" } elseif ($result -like "⚠️*") { "WARN" } else { "ERROR" }
+        Write-Log -Message $result -Level $level -LogFile $LogFile
     }
     $successCount = ($validationResults | Where-Object { $_ -like "✅*" }).Count
     $warningCount = ($validationResults | Where-Object { $_ -like "⚠️*" }).Count
     $failureCount = ($validationResults | Where-Object { $_ -like "❌*" }).Count
-    Write-Log -Message "AI Integration: $successCount/$($validationResults.Count) passed, $failureCount failed, $warningCount warnings" -Level ($failureCount -eq 0 ? "SUCCESS" : "ERROR") -LogFile $LogFile
+    $summaryLevel = if ($failureCount -eq 0) { "SUCCESS" } else { "ERROR" }
+    Write-Log -Message "AI Integration: $successCount/$($validationResults.Count) passed, $failureCount failed, $warningCount warnings" -Level $summaryLevel -LogFile $LogFile
     return $failureCount -eq 0
 }
 
@@ -687,7 +563,7 @@ $setupResults += @{Name = "Environment Config"; Success = (Test-EnvironmentConfi
 $setupResults += @{Name = "Ollama Dependency"; Success = (Add-OllamaDependency -LogFile $logFile) }
 $setupResults += @{Name = "Personality Config"; Success = (New-PersonalityConfig -LogFile $logFile) }
 $setupResults += @{Name = "AI Service Module"; Success = (New-AIService -LogFile $logFile) }
-$setupResults += @{Name = "FastAPI Enhancement"; Success = (Update-FastAPIApplication -LogFile $logFile) }
+
 $setupResults += @{Name = "AI Integration Tests"; Success = (New-AIIntegrationTests -LogFile $logFile) }
 if ($Install -or $Run) {
     Write-Log -Message "Installing AI dependencies..." -Level "INFO" -LogFile $logFile
@@ -701,35 +577,33 @@ if ($Test -or $Run) {
     Write-Log -Message "Running AI integration tests..." -Level "INFO" -LogFile $logFile
     $setupResults += @{Name = "AI Tests"; Success = (Invoke-AIIntegrationTests -LogFile $logFile) }
 }
-Write-Log -Message "=== SETUP SUMMARY ===" -Level "INFO" -LogFile $logFile
-$successfulSetups = ($setupResults | Where-Object { $_.Success }).Count
-$failedSetups = ($setupResults | Where-Object { -not $_.Success }).Count
-foreach ($result in $setupResults) {
-    Write-Log -Message "$($result.Name) - $($result.Success ? 'SUCCESS' : 'FAILED')" -Level ($result.Success ? "SUCCESS" : "ERROR") -LogFile $logFile
-}
-Write-Log -Message "Setup Results: $successfulSetups successful, $failedSetups failed" -Level "INFO" -LogFile $logFile
-Test-AIIntegrationSetup -LogFile $logFile | Out-Null
+
+# === NEXT STEPS ===
+Write-Log -Message "=== NEXT STEPS ===" -Level "INFO" -LogFile $logFile
 if (-not ($Install -or $Test -or $Configure -or $Run)) {
-    Write-Log -Message "=== NEXT STEPS ===" -Level "INFO" -LogFile $logFile
-    Write-Log -Message "1. .\03-AIIntegration.ps1 -Configure   # Validate environment" -Level "INFO" -LogFile $logFile
-    Write-Log -Message "2. .\03-AIIntegration.ps1 -Test       # Run AI integration tests" -Level "INFO" -LogFile $logFile
-    Write-Log -Message "3. .\04-OllamaSetup.ps1               # Setup Ollama service and models" -Level "INFO" -LogFile $logFile
-    Write-Log -Message "Or run with full setup: .\03-AIIntegration.ps1 -Run" -Level "INFO" -LogFile $logFile
+    Write-Log -Message "1. To validate environment: .\03-IntegrateOllama.ps1 -Configure" -Level "INFO" -LogFile $logFile
+    Write-Log -Message "2. To run AI integration tests: .\03-IntegrateOllama.ps1 -Test" -Level "INFO" -LogFile $logFile
+    Write-Log -Message "3. To setup Ollama service and models: .\04a-OllamaSetup.ps1" -Level "INFO" -LogFile $logFile
 }
 Write-Log -Message "Backend AI integration ready!" -Level "SUCCESS" -LogFile $logFile
-Write-Log -Message "Next: Run 04-OllamaSetup.ps1 to configure Ollama service and models" -Level "INFO" -LogFile $logFile
+Write-Log -Message "Next: Run .\04a-OllamaSetup.ps1 to configure Ollama service and models" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Log Files Created:" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Full transcript: $transcriptFile" -Level "INFO" -LogFile $logFile
 Write-Log -Message "Structured log: $logFile" -Level "INFO" -LogFile $logFile
-Write-Log -Message "JARVIS AI Integration Setup (v4.1) Complete!" -Level "SUCCESS" -LogFile $logFile
-# Colorized summary output
+
+# === FINAL RESULTS ===
+Write-Log -Message "=== FINAL RESULTS ===" -Level INFO -LogFile $logFile
 $successCount = ($setupResults | Where-Object { $_.Success }).Count
 $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
-Write-Host "SUCCESS: $successCount" -ForegroundColor Green
-Write-Host "FAILED: $failCount" -ForegroundColor Red
-foreach ($result in $setupResults) {
-    $fg = if ($result.Success) { "Green" } else { "Red" }
-    Write-Host "$($result.Name): $($result.Success ? 'SUCCESS' : 'FAILED')" -ForegroundColor $fg
+Write-Log -Message "SUCCESS: $successCount components" -Level SUCCESS -LogFile $logFile
+if ($failCount -gt 0) {
+    Write-Log -Message "FAILED: $failCount components" -Level ERROR -LogFile $logFile
 }
+foreach ($result in $setupResults) {
+    $status = if ($result.Success) { 'SUCCESS' } else { 'FAILED' }
+    $level = if ($result.Success) { "SUCCESS" } else { "ERROR" }
+    Write-Log -Message "$($result.Name): $status" -Level $level -LogFile $logFile
+}
+
 Write-Log -Message "$scriptPrefix v$scriptVersion complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript

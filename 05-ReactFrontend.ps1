@@ -1,6 +1,6 @@
-# 05-ReactFrontend.ps1 - React Frontend Build and Integration
-# Purpose: Create React frontend with inline-styled components for Jarvis AI
-# Last edit: 2025-07-24 - Replaced server startup with health validation in -Run mode
+# 05-ReactFrontend.ps1 - React Frontend Setup and Components
+# Purpose: Set up Vite-based React TypeScript frontend with chat UI for JARVIS
+# Last edit: 2025-08-06 - Manual inpection and alignments
 
 param(
   [switch]$Install,
@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 . .\00-CommonUtils.ps1
 
-$scriptVersion = "4.4.0"
+$scriptVersion = "5.0.0"
 $scriptPrefix = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
 $projectRoot = Get-Location
 $logsDir = Join-Path $projectRoot "logs"
@@ -37,252 +37,285 @@ $hardware = Get-AvailableHardware -LogFile $logFile
 
 function Test-Prerequisites {
   param( [Parameter(Mandatory = $true)] [string]$LogFile )
-  if (-not (Test-Command -Command "node" -LogFile $LogFile)) {
-    Write-Log -Message "Node.js not found. Run 01-Prerequisites.ps1 first." -Level ERROR -LogFile $LogFile
+  Write-Log -Message "Testing prerequisites..." -Level INFO -LogFile $LogFile
+  if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
+    Write-Log -Message "Node.js not found in PATH." -Level ERROR -LogFile $LogFile
     return $false
   }
-  if (-not (Test-Path "backend/api/main.py") -or -not (Test-Path "backend/services/ai_service.py")) {
-    Write-Log -Message "Backend not found. Run scripts 02-04 first." -Level ERROR -LogFile $LogFile
+  if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
+    Write-Log -Message "npm not found. Ensure Node.js is installed correctly." -Level ERROR -LogFile $LogFile
     return $false
   }
+  Write-Log -Message "All prerequisites verified" -Level SUCCESS -LogFile $LogFile
   return $true
 }
 
-function New-ReactApp {
-  param( [Parameter(Mandatory = $true)] [string]$LogFile )
-  if (Test-Path "frontend/package.json") {
-    Write-Log -Message "React app already exists" -Level SUCCESS -LogFile $LogFile
-    return $true
-  }
-  Write-Log -Message "Creating React app (this may take 2-5 minutes)..." -Level INFO -LogFile $LogFile
-  try {
-    $result = cmd /c "echo y | npx create-react-app frontend --template typescript 2>&1"
-    if (-not (Test-Path "frontend/package.json")) {
-      Write-Log -Message "TypeScript template failed, trying basic React..." -Level WARN -LogFile $LogFile
-      if (Test-Path "frontend") { Remove-Item "frontend" -Recurse -Force }
-      $result = cmd /c "echo y | npx create-react-app frontend 2>&1"
+function Initialize-Frontend {
+  param( [Parameter(Mandatory = $true)] [string]$FrontendDir, [string]$LogFile )
+  if (-not (Test-Path $FrontendDir)) {
+    Write-Log -Message "Creating Vite React TypeScript project..." -Level INFO -LogFile $LogFile
+    try {
+      $env:npm_config_yes = "true"
+      npm create vite@latest frontend -- --template react-ts 2>&1 | Out-File -FilePath (Join-Path $logsDir "${scriptPrefix}-npm-$timestamp.log") -Append
+      Write-Log -Message "Vite project created successfully" -Level SUCCESS -LogFile $LogFile
     }
-    if (Test-Path "frontend/package.json") {
-      Write-Log -Message "React app created successfully" -Level SUCCESS -LogFile $LogFile
-      return $true
+    catch {
+      Write-Log -Message "Failed to create Vite project. Clear npm cache with 'npm cache clean --force' and retry." -Level ERROR -LogFile $logFile
+      return $false
     }
-    Write-Log -Message "Failed to create React app: $result" -Level ERROR -LogFile $LogFile
-    return $false
   }
-  catch {
-    Write-Log -Message "React app creation failed: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
+  else { Write-Log -Message "Frontend directory exists, skipping creation" -Level INFO -LogFile $LogFile }
+  return $true
 }
 
-function Install-Dependencies {
+function Install-Frontend {
   param( [Parameter(Mandatory = $true)] [string]$LogFile )
-  Push-Location
-  try {
-    Set-Location frontend
-    $packageJson = Get-Content "package.json" | ConvertFrom-Json
-    $hasRequiredDeps = $packageJson.dependencies."axios" -and $packageJson.dependencies."lucide-react"
-    if ($hasRequiredDeps) {
-      Write-Log -Message "Dependencies already installed" -Level SUCCESS -LogFile $LogFile
-      return $true
+  Write-Log -Message "Installing frontend dependencies..." -Level INFO -LogFile $LogFile
+  $frontendDir = Join-Path $projectRoot "frontend"
+  if (-not (Initialize-Frontend -FrontendDir $frontendDir -LogFile $LogFile)) { return $false }
+  $packageJson = Join-Path $frontendDir "package.json"
+  $nodeModules = Join-Path $frontendDir "node_modules"
+  if (Test-Path $packageJson) {
+    # Test if dependencies exist, if not exist - install, if exist skip install - re-configure
+    if (-not (Test-Path $nodeModules)) {
+      Write-Log -Message "Installing base Vite dependencies..." -Level INFO -LogFile $LogFile
+      try {
+        # Install base Vite dependencies from package.json (working pattern)
+        npm install --prefix frontend 2>&1 | Out-File -FilePath (Join-Path $logsDir "${scriptPrefix}-npm-$timestamp.log") -Append
+        # Add JARVIS-specific dependencies (working pattern)
+        npm install --prefix frontend axios lucide-react 2>&1 | Out-File -FilePath (Join-Path $logsDir "${scriptPrefix}-npm-$timestamp.log") -Append
+        Write-Log -Message "Dependencies installed successfully" -Level SUCCESS -LogFile $LogFile
+      }
+      catch {
+        Write-Log -Message "Failed to install dependencies. Check npm log at $logsDir\${scriptPrefix}-npm-$timestamp.log." -Level ERROR -LogFile $LogFile
+        return $false
+      }
     }
-    Write-Log -Message "Installing frontend dependencies..." -Level INFO -LogFile $LogFile
-    $packages = @("@types/react", "@types/react-dom", "axios", "lucide-react", "react-markdown")
-    npm install @($packages) 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-      Write-Log -Message "Dependencies installed successfully" -Level SUCCESS -LogFile $LogFile
-      return $true
-    }
-    Write-Log -Message "Some dependencies had issues but continuing..." -Level WARN -LogFile $LogFile
-    return $true
+    else { Write-Log -Message "Dependencies installed, skipping npm install" -Level INFO -LogFile $LogFile }
   }
-  catch {
-    Write-Log -Message "Failed to install dependencies: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
+  else {
+    Write-Log -Message "package.json not found, setup incomplete" -Level ERROR -LogFile $LogFile
     return $false
   }
-  finally { Pop-Location }
+  # Configure package.json with tsc script
+  $packageJsonContent = Get-Content $packageJson -Raw | ConvertFrom-Json
+  if (-not $packageJsonContent.scripts.tsc) {
+    $packageJsonContent.scripts | Add-Member -Name "tsc" -Value "tsc" -MemberType NoteProperty -Force
+    $packageJsonContent | ConvertTo-Json -Depth 10 | Set-Content $packageJson -Encoding UTF8
+    Write-Log -Message "package.json updated with tsc script" -Level SUCCESS -LogFile $LogFile
+  }
+  else { Write-Log -Message "package.json tsc script already configured" -Level INFO -LogFile $LogFile }
+  # Configure tsconfig.json
+  $tsConfigContent = @"
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src"]
+}
+"@
+  $tsConfigPath = Join-Path $frontendDir "tsconfig.json"
+  if (-not (Test-Path $tsConfigPath) -or (Get-Content $tsConfigPath -Raw) -ne $tsConfigContent) {
+    try {
+      Set-Content -Path $tsConfigPath -Value $tsConfigContent -Encoding UTF8
+      Write-Log -Message "tsconfig.json configured" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to configure tsconfig.json: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
+  }
+  else { Write-Log -Message "tsconfig.json already correctly configured" -Level INFO -LogFile $LogFile }
+  # Configure tsconfig.node.json
+  $tsConfigNodeContent = @"
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowSyntheticDefaultImports": true,
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.cache/tsbuildinfo",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": false
+  },
+  "include": ["vite.config.ts"]
+}
+"@
+  $tsConfigNodePath = Join-Path $frontendDir "tsconfig.node.json"
+  if (-not (Test-Path $tsConfigNodePath) -or (Get-Content $tsConfigNodePath -Raw) -ne $tsConfigNodeContent) {
+    try {
+      Set-Content -Path $tsConfigNodePath -Value $tsConfigNodeContent -Encoding UTF8
+      Write-Log -Message "tsconfig.node.json configured" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to configure tsconfig.node.json: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
+  }
+  else { Write-Log -Message "tsconfig.node.json already correctly configured" -Level INFO -LogFile $LogFile }
+  return $true
 }
 
 function New-FrontendFiles {
   param( [Parameter(Mandatory = $true)] [string]$LogFile )
-  # Create directory structure
-  $directories = @("frontend/src/components", "frontend/src/services", "frontend/src/types", "frontend/src/hooks", "frontend/src/styles")
-  New-DirectoryStructure -Directories $directories -LogFile $LogFile
-  # Create CSS file (PRESERVE EXACT FORMATTING)
-  $cssContent = @"
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body, #root, .App {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  background: #050810;
-  color: #ffffff;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-/* Input focus placeholder fix */
-input::placeholder {
-  color: #9ca3af;
-}
-
-input:focus::placeholder {
-  opacity: 0.7;
-}
-
-/* Button hover effects */
-button:hover {
-  transition: all 0.2s ease;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 12px;
-}
-
-::-webkit-scrollbar-track {
-  background: #0a0e1a;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #1a2332;
-  border-radius: 6px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #00d4ff;
-}
+  Write-Log -Message "Creating frontend files..." -Level INFO -LogFile $LogFile
+  $frontendDir = Join-Path $projectRoot "frontend"
+  $srcDir = Join-Path $frontendDir "src"
+  $componentsDir = Join-Path $srcDir "components"
+  $hooksDir = Join-Path $srcDir "hooks"
+  $servicesDir = Join-Path $srcDir "services"
+  $typesDir = Join-Path $srcDir "types"
+  New-DirectoryStructure -Directories @($componentsDir, $hooksDir, $servicesDir, $typesDir) -LogFile $LogFile
+  # index.html
+  $indexHtmlContent = @"
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JARVIS AI Assistant</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
 "@
-  try {
-    Set-Content -Path "frontend/src/styles/index.css" -Value $cssContent
-    Write-Log -Message "CSS file created" -Level SUCCESS -LogFile $LogFile
+  $indexHtmlPath = Join-Path $frontendDir "index.html"
+  if (-not (Test-Path $indexHtmlPath) -or (Get-Content $indexHtmlPath -Raw) -ne $indexHtmlContent) {
+    try {
+      Set-Content -Path $indexHtmlPath -Value $indexHtmlContent -Encoding UTF8
+      Write-Log -Message "index.html created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create index.html: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create CSS: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  # Create API service
-  $apiService = @"
-import axios from 'axios';
+  else { Write-Log -Message "index.html already correctly configured" -Level INFO -LogFile $LogFile }
+  # vite.config.ts
+  $viteConfigContent = @"
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
   },
 });
-
-export interface ChatMessage {
-  content: string;
-}
-
-export interface ChatResponse {
-  response: string;
-  mode: string;
-  model: string;
-  timestamp: string;
-}
-
-export interface AIStatus {
-  ai_available: boolean;
-  model: string;
-  mode: string;
-  ollama_url: string;
-  available_models?: string[];
-}
-
-export interface HealthStatus {
-  status: string;
-  service: string;
-  version: string;
-  ai_integration: AIStatus;
-  timestamp: string;
-}
-
-export class ApiService {
-  static async sendMessage(content: string): Promise<ChatResponse> {
-    const response = await api.post<ChatResponse>('/api/chat', { content });
-    return response.data;
-  }
-
-  static async getHealth(): Promise<HealthStatus> {
-    const response = await api.get<HealthStatus>('/api/health');
-    return response.data;
-  }
-
-  static async getAIStatus(): Promise<AIStatus> {
-    const response = await api.get<AIStatus>('/api/ai/status');
-    return response.data;
-  }
-
-  static async testAI(): Promise<any> {
-    const response = await api.get('/api/ai/test');
-    return response.data;
-  }
-
-  static async getStatus(): Promise<any> {
-    const response = await api.get('/api/status');
-    return response.data;
-  }
-}
-
-export default ApiService;
 "@
-  try {
-    Set-Content -Path "frontend/src/services/api.ts" -Value $apiService
-    Write-Log -Message "API service created" -Level SUCCESS -LogFile $LogFile
+  $viteConfigPath = Join-Path $frontendDir "vite.config.ts"
+  if (-not (Test-Path $viteConfigPath) -or (Get-Content $viteConfigPath -Raw) -ne $viteConfigContent) {
+    try {
+      Set-Content -Path $viteConfigPath -Value $viteConfigContent -Encoding UTF8
+      Write-Log -Message "vite.config.ts created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create vite.config.ts: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create API service: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  # Create TypeScript types
-  $types = @"
+  else { Write-Log -Message "vite.config.ts already correctly configured" -Level INFO -LogFile $LogFile }
+  # types/index.ts
+  $typesContent = @"
 export interface Message {
   id: string;
   content: string;
   sender: 'user' | 'jarvis';
   timestamp: string;
-  mode?: string;
+  mode?: 'system' | 'ai' | 'error';
   model?: string;
 }
 
 export interface AIStatus {
   ai_available: boolean;
-  model: string;
   mode: string;
-  ollama_url: string;
-  available_models?: string[];
+  model?: string;
 }
 
-export interface AppState {
-  messages: Message[];
-  isConnected: boolean;
-  aiStatus: AIStatus | null;
-  isLoading: boolean;
-  error: string | null;
+export interface ChatResponse {
+  response: string;
+  timestamp: string;
+  mode: string;
+  model: string;
 }
 "@
-  try {
-    Set-Content -Path "frontend/src/types/index.ts" -Value $types
-    Write-Log -Message "TypeScript types created" -Level SUCCESS -LogFile $LogFile
+  $typesPath = Join-Path $typesDir "index.ts"
+  if (-not (Test-Path $typesPath) -or (Get-Content $typesPath -Raw) -ne $typesContent) {
+    try {
+      Set-Content -Path $typesPath -Value $typesContent -Encoding UTF8
+      Write-Log -Message "types/index.ts created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create types/index.ts: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create types: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
+  else { Write-Log -Message "types/index.ts already correctly configured" -Level INFO -LogFile $LogFile }
+  # services/api.ts
+  $apiServiceContent = @"
+import axios from 'axios';
+import type { AIStatus, ChatResponse } from '../types/index.ts';
+
+const api = axios.create({
+  baseURL: '/api',
+});
+
+export class ApiService {
+  static async getHealth(): Promise<void> {
+    await api.get('/health');
   }
-  # Create chat hook
-  $chatHook = @"
+
+  static async getAIStatus(): Promise<AIStatus> {
+    const response = await api.get('/ai/status');
+    return response.data;
+  }
+
+  static async sendMessage(content: string): Promise<ChatResponse> {
+    const response = await api.post('/chat', { content });
+    return response.data;
+  }
+}
+"@
+  $apiServicePath = Join-Path $servicesDir "api.ts"
+  if (-not (Test-Path $apiServicePath) -or (Get-Content $apiServicePath -Raw) -ne $apiServiceContent) {
+    try {
+      Set-Content -Path $apiServicePath -Value $apiServiceContent -Encoding UTF8
+      Write-Log -Message "services/api.ts created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create services/api.ts: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
+  }
+  else { Write-Log -Message "services/api.ts already correctly configured" -Level INFO -LogFile $LogFile }
+  # hooks/useChat.ts
+  $chatHookContent = @"
 import { useState, useCallback, useEffect } from 'react';
-import { ApiService } from '../services/api';
-import { Message, AIStatus } from '../types';
+import { ApiService } from '../services/api.ts';
+import type { Message, AIStatus } from '../types/index.ts';
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -291,23 +324,19 @@ export function useChat() {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Check connection and AI status
   const checkStatus = useCallback(async () => {
     try {
       await ApiService.getHealth();
       const aiStat = await ApiService.getAIStatus();
-      
       setIsConnected(true);
       setAIStatus(aiStat);
       setError(null);
-    } catch (err) {
+    } catch {
       setIsConnected(false);
-      setError('Cannot connect to Jarvis backend');
-      console.error('Status check failed:', err);
+      setError('Cannot connect to backend');
     }
   }, []);
 
-  // Send message to AI
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim()) return;
 
@@ -324,7 +353,6 @@ export function useChat() {
 
     try {
       const response = await ApiService.sendMessage(content);
-      
       const jarvisMessage: Message = {
         id: (Date.now() + 1).toString(),
         content: response.response,
@@ -333,39 +361,30 @@ export function useChat() {
         mode: response.mode,
         model: response.model,
       };
-
       setMessages(prev => [...prev, jarvisMessage]);
-    } catch (err) {
-      setError('Failed to get response from Jarvis');
-      console.error('Send message failed:', err);
-      
-      // Add error message
+    } catch {
+      setError('Failed to get response');
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: 'I apologize, but I am experiencing technical difficulties. Please check the backend connection.',
+        content: 'I apologize, but I am experiencing technical difficulties.',
         sender: 'jarvis',
         timestamp: new Date().toISOString(),
         mode: 'error',
         model: 'fallback',
       };
-      
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Clear chat
   const clearChat = useCallback(() => {
     setMessages([]);
     setError(null);
   }, []);
 
-  // Initial status check
   useEffect(() => {
     checkStatus();
-    
-    // Add welcome message
     const welcomeMessage: Message = {
       id: 'welcome',
       content: 'Hello! I am Jarvis, your AI assistant. How can I help you today?',
@@ -374,7 +393,6 @@ export function useChat() {
       mode: 'system',
       model: 'welcome',
     };
-    
     setMessages([welcomeMessage]);
   }, [checkStatus]);
 
@@ -390,20 +408,24 @@ export function useChat() {
   };
 }
 "@
-  try {
-    Set-Content -Path "frontend/src/hooks/useChat.ts" -Value $chatHook
-    Write-Log -Message "Chat hook created" -Level SUCCESS -LogFile $LogFile
+  $chatHookPath = Join-Path $hooksDir "useChat.ts"
+  if (-not (Test-Path $chatHookPath) -or (Get-Content $chatHookPath -Raw) -ne $chatHookContent) {
+    try {
+      Set-Content -Path $chatHookPath -Value $chatHookContent -Encoding UTF8
+      Write-Log -Message "hooks/useChat.ts created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create hooks/useChat.ts: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create chat hook: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  # Create chat component (PRESERVE EXACT INLINE STYLES)
-  $chatComponent = @"
-import React, { useState, useRef, useEffect } from 'react';
+  else { Write-Log -Message "hooks/useChat.ts already correctly configured" -Level INFO -LogFile $LogFile }
+  # components/Chat.tsx
+  $chatComponentContent = @"
+import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Wifi, WifiOff, Cpu } from 'lucide-react';
-import { useChat } from '../hooks/useChat';
-import { Message } from '../types';
+import { useChat } from '../hooks/useChat.ts';
+import type { Message } from '../types/index.ts';
 
 interface MessageBubbleProps {
   message: Message;
@@ -415,52 +437,16 @@ function MessageBubble({ message }: MessageBubbleProps) {
   const isAI = message.mode === 'ai';
 
   return (
-    <div style={{
-      marginBottom: '20px',
-      display: 'flex',
-      gap: '15px',
-      alignItems: 'flex-start',
-      width: '100%',
-      flexDirection: isUser ? 'row-reverse' : 'row',
-      justifyContent: isUser ? 'flex-start' : 'flex-start'
-    }}>
-      <div style={{
-        width: '40px',
-        height: '40px',
-        borderRadius: '50%',
-        backgroundColor: isUser ? '#3b82f6' : isError ? '#ef4444' : '#00d4ff',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0
-      }}>
+    <div style={{ marginBottom: '20px', display: 'flex', gap: '15px', alignItems: 'flex-start', width: '100%', flexDirection: isUser ? 'row-reverse' : 'row', justifyContent: isUser ? 'flex-start' : 'flex-start' }}>
+      <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: isUser ? '#3b82f6' : isError ? '#ef4444' : '#00d4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         {isUser ? <User size={20} color="white" /> : <Bot size={20} color={isUser || isError ? "white" : "#050810"} />}
       </div>
-      <div style={{
-        background: isUser ? '#3b82f6' : isError ? '#7f1d1d' : isAI ? '#1a2332' : '#1a2332',
-        color: isUser ? '#ffffff' : isError ? '#fecaca' : isAI ? '#00d4ff' : '#ffffff',
-        padding: '20px 25px',
-        borderRadius: '20px',
-        maxWidth: '70%',
-        fontSize: '18px',
-        lineHeight: '1.6',
-        border: isAI ? '2px solid rgba(0, 212, 255, 0.4)' : isError ? '2px solid #ef4444' : 'none'
-      }}>
+      <div style={{ background: isUser ? '#3b82f6' : isError ? '#7f1d1d' : isAI ? '#1a2332' : '#1a2332', color: isUser ? '#ffffff' : isError ? '#fecaca' : isAI ? '#00d4ff' : '#ffffff', padding: '20px 25px', borderRadius: '20px', maxWidth: '70%', fontSize: '18px', lineHeight: '1.6', border: isAI ? '2px solid rgba(0, 212, 255, 0.4)' : isError ? '2px solid #ef4444' : 'none' }}>
         <p style={{ margin: 0, fontSize: '18px', lineHeight: '1.6' }}>{message.content}</p>
         <div style={{ fontSize: '14px', opacity: 0.8, marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
-          {message.mode && message.mode !== 'system' && (
-            <>
-              <span>•</span>
-              <span style={{ textTransform: 'capitalize' }}>{message.mode}</span>
-            </>
-          )}
-          {message.model && message.model !== 'welcome' && (
-            <>
-              <span>•</span>
-              <span>{message.model}</span>
-            </>
-          )}
+          {message.mode && message.mode !== 'system' && (<><span>•</span><span style={{ textTransform: 'capitalize' }}>{message.mode}</span></>)}
+          {message.model && message.model !== 'welcome' && (<><span>•</span><span>{message.model}</span></>)}
         </div>
       </div>
     </div>
@@ -470,16 +456,7 @@ function MessageBubble({ message }: MessageBubbleProps) {
 export function Chat() {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { 
-    messages, 
-    isLoading, 
-    aiStatus, 
-    isConnected, 
-    error, 
-    sendMessage, 
-    clearChat,
-    checkStatus 
-  } = useChat();
+  const { messages, isLoading, aiStatus, isConnected, error, sendMessage, clearChat, checkStatus } = useChat();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -499,174 +476,51 @@ export function Chat() {
   };
 
   return (
-    <div style={{
-      width: '100vw',
-      height: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      background: '#050810',
-      color: '#ffffff',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      margin: 0,
-      padding: 0
-    }}>
-      {/* Header */}
-      <div style={{
-        background: '#0a0e1a',
-        color: '#ffffff',
-        padding: '25px',
-        borderBottom: '1px solid #1a2332',
-        width: '100%',
-        flexShrink: 0
-      }}>
+    <div style={{ width: '100%', maxWidth: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#050810', color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, margin: 0, padding: 0, overflow: 'hidden' }}>
+      <div style={{ background: '#0a0e1a', color: '#ffffff', padding: '25px', borderBottom: '1px solid #1a2332', width: '100%', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
             <div style={{ position: 'relative' }}>
-              <div style={{
-                width: '50px',
-                height: '50px',
-                backgroundColor: '#00d4ff',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
+              <div style={{ width: '50px', height: '50px', backgroundColor: '#00d4ff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Bot size={30} color="#050810" />
               </div>
-              <div style={{
-                position: 'absolute',
-                bottom: '-2px',
-                right: '-2px',
-                width: '18px',
-                height: '18px',
-                borderRadius: '50%',
-                border: '3px solid #0a0e1a',
-                backgroundColor: isConnected ? '#10b981' : '#ef4444'
-              }} />
+              <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', width: '18px', height: '18px', borderRadius: '50%', border: '3px solid #0a0e1a', backgroundColor: isConnected ? '#10b981' : '#ef4444' }} />
             </div>
             <div>
-              <h1 style={{
-                color: '#00d4ff',
-                fontSize: '32px',
-                fontWeight: 'bold',
-                margin: 0
-              }}>J.A.R.V.I.S.</h1>
-              <p style={{
-                margin: '8px 0 0 0',
-                fontSize: '18px',
-                color: '#9ca3af'
-              }}>
-                {isConnected ? 'Connected' : 'Disconnected'} • {aiStatus?.mode || 'Unknown'}
-              </p>
+              <h1 style={{ color: '#00d4ff', fontSize: '32px', fontWeight: 'bold', margin: 0 }}>J.A.R.V.I.S.</h1>
+              <p style={{ margin: '8px 0 0 0', fontSize: '18px', color: '#9ca3af' }}>{isConnected ? 'Connected' : 'Disconnected'} • {aiStatus?.mode || 'Unknown'}</p>
             </div>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-            <button
-              onClick={checkStatus}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#ffffff',
-                padding: '12px',
-                cursor: 'pointer',
-                borderRadius: '10px'
-              }}
-              title="Check Connection"
-            >
-              {isConnected ? (
-                <Wifi size={24} color="#10b981" />
-              ) : (
-                <WifiOff size={24} color="#ef4444" />
-              )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexShrink: 0 }}>
+            <button onClick={checkStatus} style={{ background: 'none', border: 'none', color: '#ffffff', padding: '12px', cursor: 'pointer', borderRadius: '10px', flexShrink: 0 }} title="Check Connection">
+              {isConnected ? <Wifi size={24} color="#10b981" /> : <WifiOff size={24} color="#ef4444" />}
             </button>
-
             {aiStatus && (
-              <div style={{
-                padding: '12px 18px',
-                borderRadius: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                background: aiStatus.ai_available ? '#065f46' : '#92400e',
-                color: aiStatus.ai_available ? '#10b981' : '#fbbf24'
-              }}>
+              <div style={{ padding: '12px 18px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '10px', background: aiStatus.ai_available ? '#065f46' : '#92400e', color: aiStatus.ai_available ? '#10b981' : '#fbbf24', flexShrink: 0 }}>
                 <Cpu size={18} />
-                <span style={{ fontSize: '16px', fontWeight: '500' }}>
-                  {aiStatus.ai_available ? 'AI Online' : 'Echo Mode'}
-                </span>
+                <span style={{ fontSize: '16px', fontWeight: '500' }}>{aiStatus.ai_available ? 'AI Online' : 'Echo Mode'}</span>
               </div>
             )}
-
-            <button
-              onClick={clearChat}
-              style={{
-                background: '#1a2332',
-                color: '#ffffff',
-                border: 'none',
-                padding: '12px 20px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '16px'
-              }}
-            >
-              Clear
-            </button>
+            <button onClick={clearChat} style={{ background: '#1a2332', color: '#ffffff', border: 'none', padding: '12px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '16px', flexShrink: 0 }}>Clear</button>
           </div>
         </div>
-
         {error && (
-          <div style={{
-            marginTop: '15px',
-            padding: '15px',
-            background: '#7f1d1d',
-            border: '2px solid #ef4444',
-            borderRadius: '10px',
-            fontSize: '16px',
-            color: '#fecaca'
-          }}>
+          <div style={{ marginTop: '15px', padding: '15px', background: '#7f1d1d', border: '2px solid #ef4444', borderRadius: '10px', fontSize: '16px', color: '#fecaca' }}>
             {error}
           </div>
         )}
       </div>
-
-      {/* Messages */}
-      <div style={{
-        flex: 1,
-        padding: '25px',
-        overflowY: 'auto',
-        background: '#050810',
-        width: '100%',
-        minHeight: 0
-      }}>
+      <div style={{ flex: 1, padding: '25px', overflowY: 'auto', background: '#050810', width: '100%', minHeight: 0 }}>
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
-        
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-              <div style={{
-                width: '40px',
-                height: '40px',
-                backgroundColor: '#00d4ff',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
+              <div style={{ width: '40px', height: '40px', backgroundColor: '#00d4ff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Bot size={20} color="#050810" />
               </div>
-              <div style={{
-                backgroundColor: '#1a2332',
-                borderRadius: '20px',
-                padding: '15px 20px'
-              }}>
+              <div style={{ backgroundColor: '#1a2332', borderRadius: '20px', padding: '15px 20px' }}>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <div style={{ width: '12px', height: '12px', backgroundColor: '#00d4ff', borderRadius: '50%' }} />
                   <div style={{ width: '12px', height: '12px', backgroundColor: '#00d4ff', borderRadius: '50%' }} />
@@ -676,50 +530,22 @@ export function Chat() {
             </div>
           </div>
         )}
-        
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Input */}
-      <div style={{
-        background: '#0a0e1a',
-        padding: '25px',
-        borderTop: '1px solid #1a2332',
-        width: '100%',
-        flexShrink: 0
-      }}>
+      <div style={{ background: '#0a0e1a', padding: '25px', borderTop: '1px solid #1a2332', width: '100%', flexShrink: 0 }}>
         <form onSubmit={handleSubmit} style={{ display: 'flex', gap: '15px', width: '100%' }}>
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask Jarvis anything..."
-            style={{
-              flex: 1,
-              background: '#1a2332',
-              border: '2px solid rgba(0, 212, 255, 0.4)',
-              borderRadius: '15px',
-              padding: '20px 25px',
-              color: '#ffffff',
-              fontSize: '18px',
-              outline: 'none'
-            }}
+            style={{ flex: 1, background: '#1a2332', border: '2px solid rgba(0, 212, 255, 0.4)', borderRadius: '15px', padding: '20px 25px', color: '#ffffff', fontSize: '18px', outline: 'none' }}
             disabled={isLoading || !isConnected}
           />
           <button
             type="submit"
             disabled={isLoading || !isConnected || !input.trim()}
-            style={{
-              background: (!isLoading && isConnected && input.trim()) ? '#00d4ff' : '#6b7280',
-              color: '#050810',
-              border: 'none',
-              borderRadius: '15px',
-              padding: '20px 30px',
-              cursor: (!isLoading && isConnected && input.trim()) ? 'pointer' : 'not-allowed',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
+            style={{ background: (!isLoading && isConnected && input.trim()) ? '#00d4ff' : '#6b7280', color: '#050810', border: 'none', borderRadius: '15px', padding: '20px 30px', cursor: (!isLoading && isConnected && input.trim()) ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
           >
             <Send size={22} />
           </button>
@@ -729,215 +555,92 @@ export function Chat() {
   );
 }
 "@
-  try {
-    Set-Content -Path "frontend/src/components/Chat.tsx" -Value $chatComponent
-    Write-Log -Message "Chat component created with preserved inline styles" -Level SUCCESS -LogFile $LogFile
+  $chatComponentPath = Join-Path $componentsDir "Chat.tsx"
+  if (-not (Test-Path $chatComponentPath) -or (Get-Content $chatComponentPath -Raw) -ne $chatComponentContent) {
+    try {
+      Set-Content -Path $chatComponentPath -Value $chatComponentContent -Encoding UTF8
+      Write-Log -Message "components/Chat.tsx created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create components/Chat.tsx: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create chat component: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  # Create App component
-  $appComponent = @"
-import React from 'react';
-import { Chat } from './components/Chat';
-import './styles/index.css';
+  else { Write-Log -Message "components/Chat.tsx already correctly configured" -Level INFO -LogFile $LogFile }
+  # App.tsx
+  $appComponentContent = @"
+import { Chat } from './components/Chat.tsx';
 
 function App() {
-  return (
-    <div className="App">
-      <Chat />
-    </div>
-  );
+  return <Chat />;
 }
 
 export default App;
 "@
-    
-  try {
-    Set-Content -Path "frontend/src/App.tsx" -Value $appComponent
-    Write-Log -Message "App component created" -Level SUCCESS -LogFile $LogFile
+  $appComponentPath = Join-Path $srcDir "App.tsx"
+  if (-not (Test-Path $appComponentPath) -or (Get-Content $appComponentPath -Raw) -ne $appComponentContent) {
+    try {
+      Set-Content -Path $appComponentPath -Value $appComponentContent -Encoding UTF8
+      Write-Log -Message "App.tsx created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create App.tsx: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create App component: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-    
-  # Update index.tsx
-  $indexTSX = @"
-import React from 'react';
+  else { Write-Log -Message "App.tsx already correctly configured" -Level INFO -LogFile $LogFile }
+  # main.tsx
+  $mainComponentContent = @"
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import App from './App.tsx';
 
-const root = ReactDOM.createRoot(
-  document.getElementById('root') as HTMLElement
-);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const root = document.getElementById('root');
+if (root) {
+  ReactDOM.createRoot(root).render(<App />);
+} else {
+  console.error('Root element not found');
+}
 "@
-  try {
-    Set-Content -Path "frontend/src/index.tsx" -Value $indexTSX
-    Write-Log -Message "Index component updated" -Level SUCCESS -LogFile $LogFile
+  $mainComponentPath = Join-Path $srcDir "main.tsx"
+  if (-not (Test-Path $mainComponentPath) -or (Get-Content $mainComponentPath -Raw) -ne $mainComponentContent) {
+    try {
+      Set-Content -Path $mainComponentPath -Value $mainComponentContent -Encoding UTF8
+      Write-Log -Message "main.tsx created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create main.tsx: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to update index component: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  # Create environment config
-  $envContent = @"
-# React App Environment Configuration
-REACT_APP_API_URL=http://localhost:8000
-REACT_APP_NAME=Jarvis AI Assistant
-REACT_APP_VERSION=1.0.0
-
-# Development settings
-GENERATE_SOURCEMAP=true
+  else { Write-Log -Message "main.tsx already correctly configured" -Level INFO -LogFile $LogFile }
+  # run_frontend.ps1
+  $runScriptContent = @"
+# run_frontend.ps1 - Start React Frontend
+# Purpose: Start Vite development server for JARVIS frontend
+# Last edit: 2025-07-28 - Fixed syntax errors
+`$ErrorActionPreference = "Stop"
+`$frontendDir = Join-Path (Get-Location) "frontend"
+if (-not (Test-Path (Join-Path `$frontendDir "package.json"))) {
+    Write-Host "Frontend project not found. Run 05-ReactFrontend.ps1 first." -ForegroundColor Red
+    exit 1
+}
+Push-Location `$frontendDir
+try { npm run dev }
+finally { Pop-Location }
 "@
-    
-  try {
-    Set-Content -Path "frontend/.env" -Value $envContent
-    Write-Log -Message "Environment configuration created" -Level SUCCESS -LogFile $LogFile
+  $runScriptPath = Join-Path $projectRoot "run_frontend.ps1"
+  if (-not (Test-Path $runScriptPath) -or (Get-Content $runScriptPath -Raw) -ne $runScriptContent) {
+    try {
+      Set-Content -Path $runScriptPath -Value $runScriptContent -Encoding UTF8
+      Write-Log -Message "run_frontend.ps1 created" -Level SUCCESS -LogFile $LogFile
+    }
+    catch {
+      Write-Log -Message "Failed to create run_frontend.ps1: $_" -Level ERROR -LogFile $LogFile
+      return $false
+    }
   }
-  catch {
-    Write-Log -Message "Failed to create environment config: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-    
+  else { Write-Log -Message "run_frontend.ps1 already correctly configured" -Level INFO -LogFile $LogFile }
   return $true
-}
-
-function New-RunScript {
-  param([string]$LogFile)
-  $runScript = @"
-# run_frontend.ps1 - Start the React Development Server
-# Simple development server startup - use npm commands directly for build/install
-
-Write-Host "Starting Jarvis AI Frontend..." -ForegroundColor Green
-Write-Host "Frontend URL: http://localhost:3000" -ForegroundColor Cyan
-Write-Host "Backend URL: http://localhost:8000 (ensure backend is running)" -ForegroundColor Cyan
-
-if (-not (Test-Path "frontend")) {
-    Write-Host "Frontend directory not found - run .\05-ReactFrontend.ps1 first" -ForegroundColor Red
-    return
-}
-
-Push-Location frontend
-try {
-    npm start
-} finally {
-    Pop-Location
-}
-"@
-  try {
-    Set-Content -Path "run_frontend.ps1" -Value $runScript
-    Write-Log -Message "Frontend run script created" -Level SUCCESS -LogFile $LogFile
-    return $true
-  }
-  catch {
-    Write-Log -Message "Failed to create run script: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-}
-
-function Test-FrontendSetup {
-  param( [Parameter(Mandatory = $true)] [string]$LogFile )
-  Write-Log -Message "Validating frontend setup..." -Level INFO -LogFile $LogFile
-  $checks = @(
-    @{Name = "Node.js"; Path = "node"; IsCommand = $true },
-    @{Name = "Frontend Directory"; Path = "frontend" },
-    @{Name = "Package.json"; Path = "frontend/package.json" },
-    @{Name = "Chat Component"; Path = "frontend/src/components/Chat.tsx" },
-    @{Name = "API Service"; Path = "frontend/src/services/api.ts" },
-    @{Name = "Chat Hook"; Path = "frontend/src/hooks/useChat.ts" },
-    @{Name = "Types"; Path = "frontend/src/types/index.ts" },
-    @{Name = "Styles"; Path = "frontend/src/styles/index.css" },
-    @{Name = "App Component"; Path = "frontend/src/App.tsx" },
-    @{Name = "Environment Config"; Path = "frontend/.env" },
-    @{Name = "Run Script"; Path = "run_frontend.ps1" }
-  )
-  $results = @()
-  foreach ($check in $checks) {
-    if ($check.IsCommand) { $status = Test-Command -Command $check.Path -LogFile $LogFile }
-    else { $status = Test-Path $check.Path }
-    $results += "$($status ? '✅' : '❌') $($check.Name)"
-  }
-  # Check dependencies if package.json exists
-  if (Test-Path "frontend/package.json") {
-    Push-Location
-    try {
-      Set-Location frontend
-      if (Test-Path "node_modules") {
-        $packageJson = Get-Content "package.json" | ConvertFrom-Json
-        $hasAxios = $packageJson.dependencies."axios"
-        $hasLucide = $packageJson.dependencies."lucide-react"
-                
-        $results += "$($hasAxios ? '✅' : '❌') Package: axios"
-        $results += "$($hasLucide ? '✅' : '❌') Package: lucide-react"
-        $results += "✅ Dependencies: node_modules installed"
-      }
-      else { $results += "❌ Dependencies: node_modules not found" }
-    }
-    catch { $results += "⚠️ Dependencies: Could not verify" }
-    finally { Pop-Location }
-  }
-  Write-Log -Message "=== FRONTEND VALIDATION RESULTS ===" -Level INFO -LogFile $LogFile
-  foreach ($result in $results) {
-    $level = if ($result -like "✅*") { "SUCCESS" } elseif ($result -like "⚠️*") { "WARN" } else { "ERROR" }
-    Write-Log -Message $result -Level $level -LogFile $LogFile
-  }
-  $successCount = ($results | Where-Object { $_ -like "✅*" }).Count
-  $failureCount = ($results | Where-Object { $_ -like "❌*" }).Count
-  Write-Log -Message "Validation: $successCount/$($results.Count) checks passed" -Level ($failureCount -eq 0 ? "SUCCESS" : "ERROR") -LogFile $LogFile
-  return $failureCount -eq 0
-}
-
-function Test-FrontendHealth {
-  param( [Parameter(Mandatory = $true)] [string]$LogFile )
-  Write-Log -Message "Validating frontend health..." -Level INFO -LogFile $LogFile
-  if (-not (Test-Path "frontend")) {
-    Write-Log -Message "Frontend directory not found - cannot validate" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  if (-not (Test-Path "frontend/package.json")) {
-    Write-Log -Message "Frontend package.json not found - cannot validate" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  $serverProcess = $null
-  Push-Location frontend
-  try {
-    Write-Log -Message "Starting temporary frontend server for validation..." -Level INFO -LogFile $LogFile
-    # Start development server in background
-    $serverProcess = Start-Process -PassThru -WindowStyle Hidden -FilePath "npm" -ArgumentList "start"
-    # Wait for server to start
-    Start-Sleep -Seconds 10
-    # Test if frontend is responding
-    $response = Invoke-WebRequest -Uri "http://localhost:3000" -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
-    if ($response.StatusCode -eq 200) { Write-Log -Message "Frontend health check passed - server responding" -Level SUCCESS -LogFile $LogFile }
-    # Check if it can reach backend (optional)
-    try {
-      $backendHealth = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 3
-      Write-Log -Message "Backend connectivity confirmed - full functionality available" -Level SUCCESS -LogFile $LogFile
-    }
-    catch { Write-Log -Message "Backend not available - frontend validated but backend integration unavailable" -Level WARN -LogFile $LogFile }
-    Write-Log -Message "Frontend validation successful - use .\run_frontend.ps1 to start server" -Level SUCCESS -LogFile $LogFile
-    return $true
-  }
-  catch {
-    Write-Log -Message "Frontend health validation failed: $($_.Exception.Message)" -Level ERROR -LogFile $LogFile
-    return $false
-  }
-  finally {
-    if ($serverProcess -and -not $serverProcess.HasExited) {
-      Write-Log -Message "Stopping validation server..." -Level INFO -LogFile $LogFile
-      Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
-      # Also kill any child npm processes
-      Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Parent.Id -eq $serverProcess.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
-    }
-    Pop-Location
-  }
 }
 
 # Main execution
@@ -948,72 +651,36 @@ try {
   }
   $setupResults = @()
   if ($Install -or $Run) {
-    Write-Log -Message "Setting up React frontend..." -Level INFO -LogFile $logFile
-    $setupResults += @{Name = "React App Creation"; Success = (New-ReactApp -LogFile $logFile) }
-    if ($setupResults[-1].Success) {
-      $setupResults += @{Name = "Dependencies"; Success = (Install-Dependencies -LogFile $logFile) }
-      $setupResults += @{Name = "Frontend Files"; Success = (New-FrontendFiles -LogFile $logFile) }
-      $setupResults += @{Name = "Run Script"; Success = (New-RunScript -LogFile $logFile) }
+    $success = Install-Frontend -LogFile $logFile
+    $setupResults += @{Name = "Frontend Setup"; Success = $success }
+    if (-not $success) {
+      Write-Log -Message "Frontend setup failed. Stopping execution." -Level ERROR -LogFile $logFile
+      throw "Setup failed"
     }
-    # Summary
-    Write-Log -Message "=== SETUP SUMMARY ===" -Level INFO -LogFile $logFile
-    $successCount = 0
-    $failCount = 0
-    foreach ($result in $setupResults) {
-      if ($result.Success) {
-        Write-Log -Message "$($result.Name) - SUCCESS" -Level SUCCESS -LogFile $logFile
-        $successCount++
-      }
-      else {
-        Write-Log -Message "$($result.Name) - FAILED" -Level ERROR -LogFile $logFile
-        $failCount++
-      }
-    }
-    Write-Log -Message "Setup Results: $successCount successful, $failCount failed" -Level INFO -LogFile $logFile
-    if ($failCount -gt 0) {
-      Write-Log -Message "Frontend setup had failures" -Level ERROR -LogFile $logFile
-      Stop-Transcript
-      exit 1
-    }
+    $setupResults += @{Name = "Frontend Files"; Success = (New-FrontendFiles -LogFile $logFile) }
   }
-  if ($Configure -or $Run) {
-    Write-Log -Message "Configuring frontend environment..." -Level INFO -LogFile $logFile
-    Test-EnvironmentConfig -LogFile $logFile | Out-Null
+  Write-Log -Message "=== FINAL RESULTS ===" -Level INFO -LogFile $logFile
+  $successCount = ($setupResults | Where-Object { $_.Success }).Count
+  $failCount = ($setupResults | Where-Object { -not $_.Success }).Count
+  Write-Log -Message "SUCCESS: $successCount components" -Level SUCCESS -LogFile $logFile
+  if ($failCount -gt 0) {
+    Write-Log -Message "FAILED: $failCount components" -Level ERROR -LogFile $logFile
   }
-  if ($Test -or $Run) { Test-FrontendSetup -LogFile $logFile | Out-Null }
-  # Cleanup .git folder and .gitignore if all setup is complete
-  $gitFolderPath = ".\frontend\.git\"
-  if (Test-Path $gitFolderPath) {
-    try {
-      Remove-Item -Path $gitFolderPath -Recurse -Force -ErrorAction Stop
-      Write-Log -Message "Removed .git folder from frontend directory" -Level "SUCCESS" -LogFile $logFile
-    }
-    catch { Write-Log -Message "Failed to remove .git folder: $_" -Level "WARN" -LogFile $logFile }
+  foreach ($result in $setupResults) {
+    $status = if ($result.Success) { 'SUCCESS' } else { 'FAILED' }
+    $level = if ($result.Success) { "SUCCESS" } else { "ERROR" }
+    Write-Log -Message "$($result.Name): $status" -Level $level -LogFile $logFile
   }
-  $gitIgnorePath = ".\frontend\.gitignore"
-  if (Test-Path $gitIgnorePath) {
-    try {
-      Remove-Item -Path $gitIgnorePath -Force -ErrorAction Stop
-      Write-Log -Message "Removed .gitignore file from frontend directory" -Level "SUCCESS" -LogFile $logFile
-    }
-    catch { Write-Log -Message "Failed to remove .gitignore file: $_" -Level "WARN" -LogFile $logFile }
-  }
-  if ($Run) { Test-FrontendHealth -LogFile $logFile }
-  else {
-    Write-Log -Message "=== NEXT STEPS ===" -Level INFO -LogFile $logFile
-    Write-Log -Message "1. .\05-ReactFrontend.ps1 -Run        # Validate frontend health" -Level INFO -LogFile $logFile
-    Write-Log -Message "2. .\run_frontend.ps1                 # Start development server" -Level INFO -LogFile $logFile
-    Write-Log -Message "3. .\run_backend.ps1                  # Start backend (separate terminal)" -Level INFO -LogFile $logFile
-    Write-Log -Message "" -Level INFO -LogFile $logFile
-    Write-Log -Message "URLs:" -Level INFO -LogFile $logFile
-    Write-Log -Message "Frontend: http://localhost:3000" -Level INFO -LogFile $logFile
-    Write-Log -Message "Backend:  http://localhost:8000/docs" -Level INFO -LogFile $logFile
-  }
+
+  Write-Log -Message "=== NEXT STEPS ===" -Level INFO -LogFile $logFile
+  Write-Log -Message "1. To start the backend server: .\run_backend.ps1" -Level INFO -LogFile $logFile
+  Write-Log -Message "2. To start the frontend server: .\run_frontend.ps1" -Level INFO -LogFile $logFile
 }
 catch {
   Write-Log -Message "Error: $_" -Level ERROR -LogFile $logFile
   Stop-Transcript
   exit 1
 }
+
 Write-Log -Message "${scriptPrefix} v${scriptVersion} complete." -Level SUCCESS -LogFile $logFile
 Stop-Transcript
