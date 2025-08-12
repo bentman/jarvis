@@ -42,32 +42,18 @@ git clone https://github.com/bentman/jarvis.git
 pushd jarvis
 
 # Run setup scripts in sequence
-.\01-Prerequisites.ps1         # Install system dependencies
-.\02-FastApiBackend.ps1       # Setup backend with virtual environment
-.\03-IntegrateOllama.ps1      # Integrate AI services with personality
-.\04a-OllamaSetup.ps1         # Install Ollama and models
-.\04c-OllamaTuning.ps1        # Optimize for your hardware
-.\05-ReactFrontend.ps1        # Setup React frontend
+.\00-CommonUtils.ps1     # Shared utilities and logging
+.\01-Prerequisites.ps1   # System dependency installer  
+.\02-FastApiBackend.ps1  # Backend setup with virtual environment
+.\03-IntegrateOllama.ps1 # AI service integration
+.\04-OllamaConfig.ps1    # Ollama Configuration
+.\05-ReactFrontend.ps1   # Frontend setup
 
 # Voice integration (optional but recommended)
-.\06a-VoiceSetup.ps1          # Setup voice service architecture
-.\06b-VoiceBackend.ps1        # Integrate voice with FastAPI
-.\06c-VoiceInstall.ps1        # Install voice dependencies
-.\07a-VoiceHooks.ps1          # Voice TypeScript hooks and interfaces
-.\07b-VoiceComponents.ps1     # Voice React UI components
-.\07c-VoiceIntegration.ps1    # Voice API integration and chat updates
-```
-
-### Hardware Optimization
-
-The system automatically detects and optimizes for your hardware:
-
-```powershell
-# Run hardware detection and optimization
-.\04c-OllamaTuning.ps1
-
-# For NVIDIA GPUs - installs CUDA if needed
-.\04c-OllamaTuning.ps1 -Install
+.\06-VoiceBackend.ps1      # Voice service backend
+.\07a-VoiceHooks.ps1       # Voice TypeScript hooks and interfaces
+.\07b-VoiceComponents.ps1  # Voice React UI components  
+.\07c-VoiceIntegration.ps1 # Voice API integration and chat updates
 ```
 
 ## Usage
@@ -91,16 +77,12 @@ Quick health checks:
 
 # Check system health
 .\run_backend.ps1 -Health
-
-# Test voice integration (if installed)
-.\test_voice.ps1 -ShowConfig -TestAPI
 ```
 
 ### Accessing JARVIS
 
 1. Open your browser to **http://localhost:3000**
-2. JARVIS will greet you with personality
-3. Start chatting - responses are powered by local AI
+2. Start chatting - responses are powered by local AI
 
 ### API Access
 
@@ -108,26 +90,6 @@ Quick health checks:
 - **Health Check**: http://localhost:8000/api/health
 - **AI Status**: http://localhost:8000/api/ai/status
 - **Voice Status**: http://localhost:8000/api/voice/status (if voice enabled)
-
-### Voice Features
-
-With voice integration enabled, JARVIS supports:
-
-```powershell
-# Test microphone (speech-to-text)
-.\test_voice.ps1 -TestMic
-
-# Test text-to-speech
-.\test_voice.ps1 -TestTTS
-
-# Test all voice APIs
-.\test_voice.ps1 -TestAPI
-
-# Interactive voice mode
-.\test_voice.ps1 -Interactive
-```
-
-**Wake Words**: "jarvis" or "hey jarvis"
 
 ## Configuration
 
@@ -176,13 +138,6 @@ Edit/Create `.\jarvis_personality.json` to customize JARVIS's behavior:
 
 Changes take effect after restarting the backend.
 
-### Supported AI Models
-
-Recommended models by hardware:
-- **NPU/Mobile**: `phi3:mini`, `gemma2:2b`, `llama3.2:3b`
-- **GPU (4-8GB)**: `phi3:mini`, `llama3.1:8b`, `mistral:7b`
-- **GPU (8GB+)**: `llama3.1:8b`, `codellama:13b`, `mixtral:8x7b`
-
 ## Performance Benchmarks
 
 Example benchmarks from real hardware:
@@ -196,18 +151,6 @@ Example benchmarks from real hardware:
 *Performance varies based on system optimization and load
 
 ## Development
-
-### Core Scripts
-- `00-CommonUtils.ps1` - Shared utilities and logging
-- `01-Prerequisites.ps1` - System dependency installer  
-- `02-FastApiBackend.ps1` - Backend setup with virtual environment
-- `03-IntegrateOllama.ps1` - AI service integration
-- `04-OllamaConfig.ps1` - Ollama Configuration
-- `05-ReactFrontend.ps1` - Frontend setup
-- `06-VoiceBackend.ps1` - Voice service backend
-- `07a-VoiceHooks.ps1` - Voice TypeScript hooks and interfaces
-- `07b-VoiceComponents.ps1` - Voice React UI components  
-- `07c-VoiceIntegration.ps1` - Voice API integration and chat updates
 
 ### Extending JARVIS
 
