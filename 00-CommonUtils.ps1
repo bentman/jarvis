@@ -7,10 +7,10 @@ $JARVIS_APP_VERSION = "2.3.0" # Centralized application version
 
 # Global Ollama Model Configuration - Change this variable to switch models globally
 $JARVIS_DEFAULT_MODEL = "phi3:mini"         # JARVIS System Development
-$JARVIS_CHAT_MODEL    = "gemma2:2b"         # Chat Tasks? Future State
-$JARVIS_VOICE_MODEL   = "llama3:8b"         # Voice Frontend? Future State
-$JARVIS_SUMMARY_MODEL = "llama4:scout"      # Summary Tasks? Future State
-$JARVIS_CODING_MODEL  = "qwen2.5-coder:7b"  # Dev Tasks? Future State
+# $JARVIS_CHAT_MODEL    = "gemma2:2b"         # Chat Tasks? Future State
+# $JARVIS_VOICE_MODEL   = "llama3:8b"         # Conversation Model? Future State
+# $JARVIS_SUMMARY_MODEL = "llama4:scout"      # Summary Tasks? Future State
+# $JARVIS_CODING_MODEL  = "qwen2.5-coder:7b"  # Code Dev Tasks? Future State
 
 # Log system information with modular switches
 function Write-SystemInfo {

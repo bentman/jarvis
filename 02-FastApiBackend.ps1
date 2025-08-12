@@ -54,7 +54,15 @@ function New-BackendStructure {
     param( [Parameter(Mandatory = $true)] [string]$LogFile )
     Write-Log -Message "Creating backend directory structure..." -Level INFO -LogFile $LogFile
     $dirs = @("backend", "backend\api", "backend\tests", "backend\services")
-    return New-DirectoryStructure -Directories $dirs -LogFile $LogFile
+    $created = New-DirectoryStructure -Directories $dirs -LogFile $LogFile
+
+    # Ensure packages are importable by Python by creating __init__.py
+    $apiInit = Join-Path $backendDir "api\__init__.py"
+    $servicesInit = Join-Path $backendDir "services\__init__.py"
+    if (-not (Test-Path $apiInit)) { Set-Content -Path $apiInit -Value "" -Encoding UTF8 }
+    if (-not (Test-Path $servicesInit)) { Set-Content -Path $servicesInit -Value "" -Encoding UTF8 }
+
+    return $created
 }
 
 function New-RequirementsFile {
@@ -109,6 +117,12 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 
+# Attempt to import AI service if available; keep generator idempotent and resilient
+try:
+    from services.ai_service import ai_service
+except Exception:
+    ai_service = None
+
 load_dotenv()
 app = FastAPI(
     title='Jarvis AI Assistant',
@@ -127,9 +141,12 @@ app.add_middleware(
 class ChatMessage(BaseModel):
     content: str
 
+# Extend ChatResponse to include mode and model to match frontend types
 class ChatResponse(BaseModel):
     response: str
     timestamp: str
+    mode: str
+    model: str
 
 @app.get('/')
 async def root():
@@ -151,17 +168,44 @@ async def health_check():
 
 @app.post('/api/chat', response_model=ChatResponse)
 async def chat(message: ChatMessage):
+    # If AI service is available, delegate to it; otherwise fallback to echo behavior
+    if ai_service:
+        result = await ai_service.generate_response(message.content)
+        return ChatResponse(
+            response=str(result.get('response', '')),
+            timestamp=str(result.get('timestamp', datetime.now().isoformat())),
+            mode=str(result.get('mode', 'echo')),
+            model=str(result.get('model', 'fallback'))
+        )
+    # Fallback echo behavior for environments where AI service isn't installed/configured yet
     response = f'Echo: {message.content}'
-    return ChatResponse(
-        response=response,
-        timestamp=datetime.now().isoformat()
-    )
+    return ChatResponse(response=response, timestamp=datetime.now().isoformat(), mode='echo', model='fallback')
 
 @app.get('/api/status')
 async def get_status():
+    # If AI service available, return its status; otherwise return a normalized compatibility response
+    if ai_service:
+        status = await ai_service.get_status()
+        response = {
+            'backend': 'running',
+            'ai_available': status.get('ai_available', False),
+            'mode': status.get('mode', 'echo'),
+            'model': status.get('model', None),
+            'features': {
+                'chat': status.get('ai_available', False),
+                'health_check': True,
+                'echo_mode': not status.get('ai_available', False)
+            },
+            'details': status
+        }
+        return response
+
+    # Compatibility response when AI service absent
     return {
         'backend': 'running',
-        'mode': 'echo (test mode)',
+        'ai_available': False,
+        'mode': 'echo',
+        'model': 'fallback',
         'features': {
             'chat': True,
             'health_check': True,

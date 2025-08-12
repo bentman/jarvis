@@ -289,7 +289,7 @@ export class ApiService {
   }
 
   static async getAIStatus(): Promise<AIStatus> {
-    const response = await api.get('/ai/status');
+    const response = await api.get('/status');
     return response.data;
   }
 
@@ -632,14 +632,14 @@ finally { Pop-Location }
   if (-not (Test-Path $runScriptPath) -or (Get-Content $runScriptPath -Raw) -ne $runScriptContent) {
     try {
       Set-Content -Path $runScriptPath -Value $runScriptContent -Encoding UTF8
-      Write-Log -Message "run_frontend.ps1 created" -Level SUCCESS -LogFile $LogFile
+      Write-Log -Message "run_frontend.ps1 created" -Level SUCCESS -LogFile $logFile
     }
     catch {
-      Write-Log -Message "Failed to create run_frontend.ps1: $_" -Level ERROR -LogFile $LogFile
+      Write-Log -Message "Failed to create run_frontend.ps1: $_" -Level ERROR -LogFile $logFile
       return $false
     }
   }
-  else { Write-Log -Message "run_frontend.ps1 already correctly configured" -Level INFO -LogFile $LogFile }
+  else { Write-Log -Message "run_frontend.ps1 already correctly configured" -Level INFO -LogFile $logFile }
   return $true
 }
 

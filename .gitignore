@@ -236,3 +236,4 @@ recordings/
 .cache/
 cache/
 __cache__/
+.aider*
