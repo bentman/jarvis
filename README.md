@@ -202,32 +202,12 @@ Example benchmarks from real hardware:
 - `01-Prerequisites.ps1` - System dependency installer  
 - `02-FastApiBackend.ps1` - Backend setup with virtual environment
 - `03-IntegrateOllama.ps1` - AI service integration
-- `04a-OllamaSetup.ps1` - Ollama installation
-- `04b-OllamaDiag.ps1` - Hardware diagnostics
-- `04c-OllamaTuning.ps1` - Performance optimization
+- `04-OllamaConfig.ps1` - Ollama Configuration
 - `05-ReactFrontend.ps1` - Frontend setup
-- `06a-VoiceSetup.ps1` - Voice service architecture
-- `06b-VoiceBackend.ps1` - Voice FastAPI integration
-- `06c-VoiceInstall.ps1` - Voice dependencies installation
+- `06-VoiceBackend.ps1` - Voice service backend
 - `07a-VoiceHooks.ps1` - Voice TypeScript hooks and interfaces
 - `07b-VoiceComponents.ps1` - Voice React UI components  
 - `07c-VoiceIntegration.ps1` - Voice API integration and chat updates
-
-### Quick Commands
-
-```powershell
-# Frontend dependency install
-.\run_frontend.ps1 -Install
-
-# Frontend production build
-.\run_frontend.ps1 -Build
-
-# Backend tests
-.\run_backend.ps1 -Test
-
-# Voice integration tests
-.\test_voice.ps1 -TestMic -TestTTS -TestAPI
-```
 
 ### Extending JARVIS
 
@@ -236,22 +216,15 @@ Future enhancements to explore:
 - 📊 Data visualization  
 - 🔌 Plugin system for custom commands
 - 📱 Mobile app development
-- 🏠 Smart home integration
 - 📧 Email and calendar integration
 
 ## System Requirements
 
 ### Minimum
-- Windows 11
-- 8GB RAM
-- 20GB free disk space
-- Internet for initial setup
+- Windows 11, 8GB RAM, 20GB free disk space, Internet for initial setup
 
 ### Recommended
-- 16GB+ RAM
-- NPU or dedicated GPU
-- SSD storage
-- Persistent internet for model updates
+- 16GB+ RAM, NPU or dedicated GPU, SSD storage, Internet for model updates
 
 ## Security
 
