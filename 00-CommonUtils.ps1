@@ -252,15 +252,19 @@ function Test-Tool {
             Write-Log -Message "$Name found: $(if ($version) { $version } else { 'version unknown' })" -Level "SUCCESS" -LogFile $LogFile
             return $true
         }
-        if (winget list --id $Id --exact 2>$null -and $LASTEXITCODE -eq 0) {
-            Write-Log -Message "$Name installed but not in PATH" -Level "WARN" -LogFile $LogFile
-            return $true
+        try {
+            $wingetResult = winget list --id $Id --exact 2>&1
+            if ($LASTEXITCODE -eq 0 -and $wingetResult -notlike "*No installed package found*") {
+                Write-Log -Message "$Name installed but not in PATH" -Level "WARN" -LogFile $LogFile
+                return $true
+            }
         }
+        catch { Write-Log -Message "Winget check failed for $($Name): $($_.Exception.Message)" -Level "WARN" -LogFile $LogFile }
         Write-Log -Message "$Name not installed" -Level "ERROR" -LogFile $LogFile
         return $false
     }
     catch {
-        Write-Log -Message "Error checking ${$Name}: $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
+        Write-Log -Message "Error checking $($Name): $($_.Exception.Message)" -Level "ERROR" -LogFile $LogFile
         return $false
     }
 }
@@ -554,8 +558,8 @@ function Get-AvailableHardware {
                 $hardware.GPU.CUDACapable = Test-Command -Command "nvidia-smi" -LogFile $LogFile
                 if ($hardware.GPU.CUDACapable) {
                     try {
-                        $nvidiaSmiOutput = (nvidia-smi --query-gpu=memory.total --format=noheader,nounits,csv)
-                        $vramMiB = [int]$nvidiaSmiOutput.Trim()
+                        $nvidiaSmiOutput = (nvidia-smi --query-gpu=memory.total --format=noheader)
+                        $vramMiB = [int]$nvidiaSmiOutput.Trim(' MiB')
                         $hardware.GPU.VRAM = [math]::Round($vramMiB / 1024, 2)
                         Write-Log -Message "NVIDIA VRAM detected via nvidia-smi: $($hardware.GPU.VRAM) GB" -Level "INFO" -LogFile $LogFile
                     }
@@ -642,7 +646,7 @@ function Get-AvailableHardware {
     }
 }
 
-# Generate optimal configuration for all hardware types including unknown hardware
+# Generate optimal configuration using Ollama environment variables
 function Get-OptimalConfiguration {
     param(
         [Parameter(Mandatory = $true)]
@@ -660,196 +664,90 @@ function Get-OptimalConfiguration {
     $tops = if ($Hardware.NPU.Available) { $Hardware.NPU.TOPS } else { 0 }
     switch -Wildcard ($primaryType) {
         "*NPU*" {
-            if ($Hardware.NPU.Type -eq "Qualcomm_Hexagon") {
-                # Qualcomm Snapdragon NPU optimization
+            # NPU optimization - Using generic settings since NPU env vars are non-standard
+            $config.EnvironmentVars = @{
+                "OLLAMA_NUM_PARALLEL"      = "2"
+                "OLLAMA_MAX_LOADED_MODELS" = "1"
+                "OLLAMA_MAX_QUEUE"         = "64"
+            }
+            $config.Instructions += "NPU optimization applied ($($tops) TOPS)"
+            $config.Instructions += "Note: Using conservative CPU settings as NPU environment variables are hardware-specific"
+            $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+        }
+        "NVIDIA_GPU" {
+            if ($Hardware.GPU.CUDACapable) {
+                # NVIDIA with CUDA environment variables
                 $config.EnvironmentVars = @{
-                    "OLLAMA_NPU"               = "1"
-                    "OLLAMA_USE_NPU"           = "1"
-                    "OLLAMA_NUM_THREAD"        = "8"
-                    "OLLAMA_NUM_PARALLEL"      = "2"
-                    "OLLAMA_MAX_LOADED_MODELS" = "1"
+                    "CUDA_VISIBLE_DEVICES"     = "0"
                     "OLLAMA_FLASH_ATTENTION"   = "1"
-                    "OLLAMA_KV_CACHE_TYPE"     = "f16"
+                    "OLLAMA_NUM_PARALLEL"      = if ($vram -ge 12) { "4" } elseif ($vram -ge 8) { "2" } else { "1" }
+                    "OLLAMA_MAX_LOADED_MODELS" = "1"
+                    "OLLAMA_MAX_QUEUE"         = "128"
                 }
-                $config.Instructions += "🚀 Qualcomm Hexagon NPU optimization applied ($($tops) TOPS)"
-                $config.ModelRecommendations += @("phi3:mini", "gemma2:2b", "llama3.2:3b")
+                $config.Instructions += "NVIDIA GPU with CUDA acceleration enabled ($($vram) GB VRAM)"
+                $config.Instructions += "CUDA Driver: Detected (nvidia-smi available)"
+                $config.Instructions += "Ollama will auto-detect CUDA and manage GPU memory"
+                $config.ModelRecommendations += if ($vram -ge 24) { @("llama3.1:70b", "codellama:34b", "mixtral:8x7b") }
+                elseif ($vram -ge 16) { @("llama3.1:13b", "codellama:13b", "llama3.1:8b") }
+                elseif ($vram -ge 8) { @("llama3.1:8b", "codellama:7b", "gemma2:9b") }
+                else { @("phi3:mini", "gemma2:2b", "llama3.2:3b") }
             }
-            elseif ($Hardware.NPU.Type -eq "Intel_AI_Boost") {
-                # Intel AI Boost NPU optimization
+            else {
+                # NVIDIA without CUDA environment variables
                 $config.EnvironmentVars = @{
-                    "OLLAMA_INTEL_NPU"         = "1"
-                    "OLLAMA_NUM_THREAD"        = "6"
                     "OLLAMA_NUM_PARALLEL"      = "2"
                     "OLLAMA_MAX_LOADED_MODELS" = "1"
                 }
-                $config.Instructions += "🚀 Intel AI Boost NPU optimization applied ($($tops) TOPS)"
+                $config.Instructions += "NVIDIA GPU detected without CUDA ($($vram) GB VRAM)"
+                $config.Instructions += "CUDA Driver: Not detected (nvidia-smi not found)"
+                $config.Instructions += "PERFORMANCE IMPROVEMENT AVAILABLE:"
+                $config.Instructions += "Install CUDA Toolkit for GPU acceleration"
+                $config.Instructions += "Download: https://developer.nvidia.com/cuda-downloads"
                 $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
-            }
-            elseif ($Hardware.NPU.Type -eq "Unknown_NPU") {
-                # Unknown NPU - Architecture-aware conservative acceleration
-                if ($Hardware.Platform -eq "ARM64") {
-                    # ARM64 unknown NPU (likely mobile/efficiency focused)
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_NPU"               = "1"
-                        "OLLAMA_ACCELERATION"      = "1"
-                        "OLLAMA_NPU_LAYERS"        = "10"  # More aggressive on ARM64
-                        "OLLAMA_NUM_THREAD"        = "6"
-                        "OLLAMA_NUM_PARALLEL"      = "2"
-                        "OLLAMA_MAX_LOADED_MODELS" = "1"
-                        "OLLAMA_FLASH_ATTENTION"   = "1"
-                    }
-                    $config.Instructions += "✅ Unknown ARM64 NPU detected - Mobile-optimized acceleration applied"
-                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b", "llama3.2:3b")
-                }
-                else {
-                    # x64 unknown NPU (likely desktop/performance focused)
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_NPU"               = "1" 
-                        "OLLAMA_ACCELERATION"      = "1"
-                        "OLLAMA_NPU_LAYERS"        = "8"  # Conservative on x64
-                        "OLLAMA_NUM_THREAD"        = "4"
-                        "OLLAMA_NUM_PARALLEL"      = "2"
-                        "OLLAMA_MAX_LOADED_MODELS" = "1"
-                        "OLLAMA_MAX_QUEUE"         = "128"
-                    }
-                    $config.Instructions += "⚠️ Unknown x64 NPU detected - Desktop-optimized acceleration applied"
-                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
-                }
-                $config.Instructions += "Device: $($Hardware.NPU.Name)"
-                $config.Instructions += "DeviceID: $($Hardware.NPU.DeviceID)"
-                $config.Instructions += "TOPS Estimate: $($Hardware.NPU.TOPS)"
-                $config.Instructions += "Architecture: $($Hardware.Platform)"
-                $config.Instructions += "Optimization: Conservative NPU acceleration with platform awareness"
-                $config.Instructions += "Recommendation: Run .\04b-OllamaDiag.ps1 for performance validation"
             }
         }
-        "*GPU*" {
-            if ($Hardware.GPU.Type -eq "NVIDIA") {
-                # NVIDIA GPU optimization with CUDA differentiation
-                if ($Hardware.GPU.CUDACapable) {
-                    # CUDA-enabled NVIDIA GPU - Maximum performance optimization
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_CUDA"                = "1"
-                        "CUDA_VISIBLE_DEVICES"       = "0"
-                        "OLLAMA_GPU_LAYERS"          = "-1"  # Use all available GPU layers
-                        "OLLAMA_GPU_MEMORY_FRACTION" = "0.9"  # Use 90% of VRAM
-                        "OLLAMA_GPU_OVERHEAD"        = "$([math]::Floor($vram * 0.15 * 1024 * 1024 * 1024))"  # 15% overhead
-                        "OLLAMA_NUM_PARALLEL"        = if ($vram -ge 12) { "6" } elseif ($vram -ge 8) { "4" } else { "3" }
-                        "OLLAMA_MAX_LOADED_MODELS"   = if ($vram -ge 16) { "3" } elseif ($vram -ge 8) { "2" } else { "1" }
-                        "OLLAMA_FLASH_ATTENTION"     = "1"
-                        "OLLAMA_USE_MLOCK"           = "1"  # Prevent swapping to disk
-                        "OLLAMA_MAX_QUEUE"           = "512"
-                    }
-                    $config.Instructions += "🚀 NVIDIA GPU with CUDA acceleration enabled ($($vram) GB VRAM)"
-                    $config.Instructions += "CUDA Driver: ✅ Detected (nvidia-smi available)"
-                    $config.Instructions += "GPU Memory: $([math]::Floor($vram * 0.9)) GB allocated for models"
-                    $config.ModelRecommendations += if ($vram -ge 24) { 
-                        @("llama3.1:70b", "codellama:34b", "mixtral:8x7b") 
-                    }
-                    elseif ($vram -ge 16) { 
-                        @("llama3.1:13b", "codellama:13b", "llama3.1:8b") 
-                    }
-                    elseif ($vram -ge 8) { 
-                        @("llama3.1:8b", "codellama:7b", "gemma2:9b") 
-                    }
-                    else { 
-                        @("phi3:mini", "gemma2:2b", "llama3.2:3b") 
-                    }
-                }
-                else {
-                    # NVIDIA GPU without CUDA - Basic optimization with installation recommendation
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_ACCELERATION"      = "1"
-                        "OLLAMA_GPU_LAYERS"        = "10"  # Conservative without CUDA
-                        "OLLAMA_NUM_PARALLEL"      = "2"
-                        "OLLAMA_MAX_LOADED_MODELS" = "1"
-                    }
-                    $config.Instructions += "⚠️ NVIDIA GPU detected without CUDA ($($vram) GB VRAM)"
-                    $config.Instructions += "CUDA Driver: ❌ Not detected (nvidia-smi not found)"
-                    $config.Instructions += "🚀 PERFORMANCE IMPROVEMENT AVAILABLE:"
-                    $config.Instructions += "Install CUDA Toolkit for 3-5x faster inference"
-                    $config.Instructions += "Download: https://developer.nvidia.com/cuda-downloads"
-                    $config.Instructions += "After installation, restart and re-run setup scripts"
-                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")  # Conservative without CUDA
-                }
+        { $_ -match "AMD" } {
+            # AMD GPU environment variables
+            $config.EnvironmentVars = @{ "OLLAMA_NUM_PARALLEL" = "2" }
+            # Set ROCm environment variables if needed
+            $config.Instructions += "AMD GPU detected ($($vram) GB VRAM)"
+            $config.Instructions += "Note: Use HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES for GPU selection if needed"
+            $config.Instructions += "Ollama will attempt ROCm acceleration if available"
+            $config.ModelRecommendations += if ($vram -ge 8) { @("llama3.1:8b", "gemma2") } else { @("phi3:mini", "gemma2:2b") }
+        }
+        { $_ -match "Intel" } {
+            # Intel Arc GPU environment variables
+            $config.EnvironmentVars = @{ "OLLAMA_NUM_PARALLEL" = "1" }
+            $config.Instructions += "Intel Arc GPU detected ($($vram) GB VRAM)"
+            $config.Instructions += "Note: Limited Ollama support, using CPU fallback with conservative settings"
+            $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
+        }
+        { $_ -match "Unknown.*GPU" } {
+            # Unknown GPU environment variables
+            $config.EnvironmentVars = @{
+                "OLLAMA_NUM_PARALLEL"      = if ($vram -ge 8) { "2" } else { "1" }
+                "OLLAMA_MAX_LOADED_MODELS" = "1"
+                "OLLAMA_MAX_QUEUE"         = if ($vram -ge 8) { "128" } else { "64" }
             }
-            elseif ($Hardware.GPU.Type -eq "AMD") {
-                # AMD GPU optimization
-                $config.EnvironmentVars = @{
-                    "OLLAMA_HIP"          = "1"
-                    "OLLAMA_GPU_LAYERS"   = "-1"
-                    "OLLAMA_NUM_PARALLEL" = "3"
-                }
-                $config.Instructions += "✅ AMD GPU acceleration enabled ($($vram) GB VRAM)"
-                $config.ModelRecommendations += if ($vram -ge 8) { @("llama3.1:8b", "gemma2") } else { @("phi3:mini", "gemma2:2b") }
-            }
-            elseif ($Hardware.GPU.Type -eq "Intel_Arc") {
-                # Intel Arc GPU optimization
-                $config.EnvironmentVars = @{
-                    "OLLAMA_INTEL_GPU"    = "1"
-                    "OLLAMA_GPU_LAYERS"   = "20"
-                    "OLLAMA_NUM_PARALLEL" = "2"
-                }
-                $config.Instructions += "✅ Intel Arc GPU acceleration enabled ($($vram) GB VRAM)"
-                $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
-            }
-            elseif ($Hardware.GPU.Type -eq "Unknown") {
-                # Unknown GPU - Enhanced generic acceleration based on 2024 research
-                if ($vram -ge 8) {
-                    # High-end unknown GPU - Aggressive optimization
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_ACCELERATION"        = "1"
-                        "OLLAMA_GPU_MEMORY_FRACTION" = "0.8"
-                        "OLLAMA_GPU_LAYERS"          = "-1"  # Use all available GPU layers
-                        "OLLAMA_NUM_PARALLEL"        = "4"
-                        "OLLAMA_MAX_LOADED_MODELS"   = "2"
-                        "OLLAMA_TENSOR_PARALLEL"     = "true"
-                    }
-                    $config.Instructions += "✅ Unknown GPU detected - High-performance acceleration applied ($($vram) GB VRAM)"
-                    $config.ModelRecommendations += @("llama3.2:7b", "codellama:7b", "gemma2:9b")
-                }
-                elseif ($vram -ge 4) {
-                    # Mid-range unknown GPU - Conservative acceleration
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_ACCELERATION"        = "1"
-                        "OLLAMA_GPU_MEMORY_FRACTION" = "0.8"
-                        "OLLAMA_GPU_LAYERS"          = "20"
-                        "OLLAMA_NUM_PARALLEL"        = "2"
-                        "OLLAMA_MAX_LOADED_MODELS"   = "1"
-                        "OLLAMA_MAX_QUEUE"           = "256"
-                    }
-                    $config.Instructions += "⚠️ Unknown GPU detected - Generic acceleration applied ($($vram) GB VRAM)"
-                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b", "llama3.2:3b")
-                }
-                else {
-                    # Low VRAM unknown GPU - Hybrid CPU-GPU fallback
-                    $config.EnvironmentVars = @{
-                        "OLLAMA_CPU_THREADS"       = [Math]::Min($cores, 8).ToString()
-                        "OLLAMA_GPU_LAYERS"        = "5"  # Use minimal GPU layers
-                        "OLLAMA_NUM_PARALLEL"      = "1"
-                        "OLLAMA_MAX_LOADED_MODELS" = "1"
-                    }
-                    $config.Instructions += "⚠️ Unknown GPU with low VRAM ($($vram) GB) - Hybrid CPU-GPU applied"
-                    $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
-                }
-                $config.Instructions += "Device: $($Hardware.GPU.Name)"
-                $config.Instructions += "Vendor: $($Hardware.GPU.Vendor)"
-                $config.Instructions += "DeviceID: $($Hardware.GPU.DeviceID)"
-                $config.Instructions += "Optimization: Based on 2024 LLM inference research"
-                $config.Instructions += "Recommendation: Monitor performance and adjust OLLAMA_GPU_LAYERS if needed"
-            }
+            $config.Instructions += "Unknown GPU detected ($($vram) GB VRAM)"
+            $config.Instructions += "Using conservative CPU settings with GPU detection fallback"
+            $config.Instructions += "Device: $($Hardware.GPU.Name)"
+            $config.ModelRecommendations += if ($vram -ge 8) { @("llama3.2:7b", "phi3:mini") } else { @("phi3:mini", "gemma2:2b") }
         }
         default {
-            # CPU optimization
-            $threads = [Math]::Min($cores, 12)
+            # CPU optimization - Basic valid settings
+            $threads = [Math]::Min($cores, 8)  # Conservative thread count
             $config.EnvironmentVars = @{
                 "OLLAMA_NUM_PARALLEL"      = $threads.ToString()
                 "OLLAMA_MAX_LOADED_MODELS" = "1"
-                "OLLAMA_NUM_THREAD"        = $threads.ToString()
             }
             $config.Instructions += "CPU optimization applied with $threads threads"
             $config.ModelRecommendations += @("phi3:mini", "gemma2:2b")
         }
+    }
+    # Add platform-specific optimizations if needed
+    if ($Hardware.Platform -eq "ARM64") {
+        $config.Instructions += "ARM64 platform detected - using ARM-optimized settings"
     }
     return $config
 }
@@ -895,12 +793,10 @@ function Start-OllamaService {
         [switch]$ForceRestart
     )
     Write-Log -Message "Starting Ollama service..." -Level INFO -LogFile $LogFile
-    
     if ($ForceRestart -and (Test-OllamaService -LogFile $LogFile)) {
         Write-Log -Message "Force restart requested - stopping existing service" -Level INFO -LogFile $LogFile
         Stop-OllamaService -LogFile $LogFile
     }
-    
     if (Test-OllamaService -LogFile $LogFile) {
         Write-Log -Message "Ollama service already running - no action needed" -Level INFO -LogFile $LogFile
         return $true

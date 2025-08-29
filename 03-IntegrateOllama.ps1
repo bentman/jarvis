@@ -103,7 +103,7 @@ function New-PersonalityConfig {
       ],
       "tone": "professional with humor",
       "humor_level": "medium"
-  },
+  }
 }
 "@
     
