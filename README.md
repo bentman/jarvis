@@ -15,7 +15,7 @@ JARVIS (Just A Rather Very Intelligent System) is a full-stack AI assistant that
 - ⚡ **Cross-Platform**: Optimized for both x64 (Intel/AMD) and ARM64 (Snapdragon X)
 - 🔄 **Fallback Mode**: Continues working even when AI services are unavailable
 - 🎨 **Modern UI**: React-based chat interface with real-time updates
-- 🎤 **Modern Voice Stack**: STT (faster-whisper), TTS (coqui-tts), wake word (openWakeWord), audio library (sounddevice)
+- 🎤 **Modern Voice Stack**: STT (faster-whisper), TTS (Kokoro-82M), wake word (openWakeWord)
 
 ## Prerequisites
 
@@ -51,9 +51,7 @@ pushd jarvis
 
 # Voice integration (optional but recommended)
 .\06-VoiceBackend.ps1      # Voice service backend
-.\07a-VoiceHooks.ps1       # Voice TypeScript hooks and interfaces
-.\07b-VoiceComponents.ps1  # Voice React UI components  
-.\07c-VoiceIntegration.ps1 # Voice API integration and chat updates
+.\07-VoiceIntegration.ps1  # Voice hooks, components, and API integration
 ```
 
 ## Usage
@@ -90,6 +88,7 @@ Quick health checks:
 - **Health Check**: http://localhost:8000/api/health
 - **AI Status**: http://localhost:8000/api/ai/status
 - **Voice Status**: http://localhost:8000/api/voice/status (if voice enabled)
+- **TTS Preview**: http://localhost:8000/api/voice/tts (POST)
 
 ## Configuration
 
@@ -104,9 +103,8 @@ API_PORT=8000                # Backend port
 # Voice settings (if voice integration enabled)
 JARVIS_WAKE_WORDS=jarvis,hey jarvis
 FASTER_WHISPER_MODEL=base
-COQUI_TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
-VOICE_SAMPLE_RATE=16000
-AUDIO_LIBRARY=sounddevice
+KOKORO_TTS_MODEL=kokoro-82M
+VOICE_SAMPLE_RATE=24000
 ```
 
 ### Personality Customization
@@ -121,8 +119,7 @@ Edit/Create `.\jarvis_personality.json` to customize JARVIS's behavior:
     "formality": "always 'Sir' or 'Mr. [Name]', never casual"
   },
   "voice_settings": {
-    "voice_stack": "faster-whisper + coqui-tts + openWakeWord",
-    "audio_library": "sounddevice",
+    "voice_stack": "faster-whisper + kokoro-tts + openWakeWord",
     "wake_words": ["jarvis", "hey jarvis"],
     "speech_rate": 1.0,
     "voice_pitch": 0.5,
